@@ -132,14 +132,19 @@ def write_test_results_with_location(
     run_id: str, test_run, evaluations, summary, use_global_dir: bool = False
 ):
     """Write test results to JSON files with location choice"""
+    import os
+    import uuid
+
     if use_global_dir:
         runs_dir = ensure_results_directory()  # Existing XDG function
     else:
         runs_dir = ensure_local_results_directory()  # New local function
 
-    # Generate datetime prefix for better file recognition
-    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename_prefix = f"{datetime_str}_{run_id}"
+    # Generate datetime prefix with collision safety
+    # Add process ID, microseconds, and UUID for collision safety
+    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]  # Include milliseconds
+    unique_id = str(uuid.uuid4())[:8]
+    filename_prefix = f"{datetime_str}_{os.getpid()}_{unique_id}_{run_id}"
 
     # Use recursive serialization to handle all nested Pydantic models
     test_run_data = serialize_nested_models(test_run)
@@ -174,11 +179,16 @@ def convert_test_case_definition_to_test_case(test_case_def, server_name: str):
 
 def write_test_results(run_id: str, test_run, evaluations, summary):
     """Write test results to JSON files"""
+    import os
+    import uuid
+
     runs_dir = ensure_results_directory()
 
-    # Generate datetime prefix for better file recognition
-    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename_prefix = f"{datetime_str}_{run_id}"
+    # Generate datetime prefix with collision safety
+    # Add process ID, microseconds, and UUID for collision safety
+    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]  # Include milliseconds
+    unique_id = str(uuid.uuid4())[:8]
+    filename_prefix = f"{datetime_str}_{os.getpid()}_{unique_id}_{run_id}"
 
     # Use recursive serialization to handle all nested Pydantic models
     test_run_data = serialize_nested_models(test_run)

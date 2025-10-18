@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, timedelta
 
 from ..config.config_manager import ConfigManager
@@ -65,13 +66,16 @@ class UpdateNotifier:
 
 # Global instance
 _update_notifier: UpdateNotifier | None = None
+_update_notifier_lock = threading.Lock()
 
 
 def get_update_notifier() -> UpdateNotifier:
     """Get shared update notifier instance"""
     global _update_notifier
-    if _update_notifier is None:
-        _update_notifier = UpdateNotifier()
+    if _update_notifier is None:  # First check (optimization)
+        with _update_notifier_lock:
+            if _update_notifier is None:  # Second check (safety)
+                _update_notifier = UpdateNotifier()
     return _update_notifier
 
 

@@ -381,14 +381,19 @@ CRITICAL: success_criteria must be a single string, NOT an array of strings. Com
     ) -> None:
         """Handle JSON parsing errors and save debug information"""
         import os
+        import uuid
         from datetime import datetime
 
         self.logger.error(f"Failed to parse generated tests JSON: {error}")
 
         debug_dir = "test_results/debug"
         os.makedirs(debug_dir, exist_ok=True)
+
+        # Add collision safety with microseconds and unique ID
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # Include milliseconds
+        unique_id = uuid.uuid4().hex[:8]
         debug_file = os.path.join(
-            debug_dir, f"json_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            debug_dir, f"json_error_{timestamp}_{unique_id}.txt"
         )
 
         self._save_debug_file(debug_file, error, result_text, original_text)

@@ -41,8 +41,14 @@ class ProviderInterface(ABC):
         self.metrics = ProviderMetrics(provider=provider_type)
 
     @abstractmethod
-    async def send_message(self, message: str, system_prompt: str | None = None) -> str:
-        """Send message and get response"""
+    async def send_message(self, message: str, system_prompt: str | None = None, session_id: str | None = None) -> str:
+        """Send message and get response
+
+        Args:
+            message: The message to send
+            system_prompt: Optional system prompt
+            session_id: Optional session ID for parallel execution safety
+        """
         pass
 
     @abstractmethod
@@ -83,15 +89,18 @@ class AnthropicProvider(ProviderInterface):
         self.model = config.get("model", "claude-sonnet-4-20250514")
         self.sessions: dict[str, Any] = {}
 
-    async def send_message(self, message: str, system_prompt: str | None = None) -> str:
-        """Send message using Anthropic API"""
+    async def send_message(self, message: str, system_prompt: str | None = None, session_id: str | None = None) -> str:
+        """Send message using Anthropic API with session-specific MCP connections"""
         start_time = time.perf_counter()
         self.metrics.requests_made += 1
 
         try:
-            # Implementation using existing ClaudeAgent logic
-            # This maintains backward compatibility while adding async support
-            response = await self._anthropic_api_call(message, system_prompt)
+            # Use session-specific MCP client if session_id is provided
+            if session_id and session_id in self.sessions:
+                response = await self._anthropic_api_call_with_session(message, system_prompt, session_id)
+            else:
+                # Fallback to non-session mode for backward compatibility
+                response = await self._anthropic_api_call(message, system_prompt)
 
             # Update metrics
             latency = (time.perf_counter() - start_time) * 1000
@@ -160,17 +169,152 @@ class AnthropicProvider(ProviderInterface):
             raise
 
     async def start_session(self, session_id: str) -> bool:
-        """Start isolated session"""
-        self.sessions[session_id] = {"created_at": time.time(), "message_count": 0}
+        """Start isolated session with dedicated MCP connections"""
+        from ..mcp_client.client_manager import MCPClientManager
+
+        # Create a dedicated MCP client manager for this session
+        # This ensures each parallel test has its own isolated connection
+        mcp_client = MCPClientManager()
+        server_ids = []
+
+        # Connect to MCP servers for this session
+        if "mcp_servers" in self.config:
+            for server in self.config["mcp_servers"]:
+                try:
+                    server_id = await mcp_client.connect_server(server)
+                    server_ids.append(server_id)
+                except Exception as e:
+                    # Clean up any connections made so far
+                    for sid in server_ids:
+                        try:
+                            await mcp_client.disconnect_server(sid)
+                        except Exception:
+                            pass
+                    raise RuntimeError(f"Failed to connect to server: {e}") from e
+
+        self.sessions[session_id] = {
+            "created_at": time.time(),
+            "message_count": 0,
+            "mcp_client": mcp_client,
+            "server_ids": server_ids,
+        }
         return True
 
     async def end_session(self, session_id: str) -> None:
-        """Clean up session"""
+        """Clean up session and disconnect MCP servers"""
         if session_id in self.sessions:
+            session = self.sessions[session_id]
+
+            # Disconnect all MCP servers for this session
+            mcp_client = session.get("mcp_client")
+            server_ids = session.get("server_ids", [])
+
+            if mcp_client and server_ids:
+                for server_id in server_ids:
+                    try:
+                        await mcp_client.disconnect_server(server_id)
+                    except Exception:
+                        pass  # Ignore cleanup errors
+
             del self.sessions[session_id]
 
+    async def _anthropic_api_call_with_session(self, message: str, system_prompt: str | None, session_id: str) -> str:
+        """Internal API call implementation using session-specific MCP client"""
+        import anthropic
+        from ..mcp_client.capability_router import MCPCapabilityRouter
+
+        # Get session-specific MCP client
+        session = self.sessions[session_id]
+        mcp_client = session["mcp_client"]
+        server_ids = session["server_ids"]
+
+        # Get MCP tools from the session's MCP client
+        mcp_tools = []
+        if server_ids:
+            mcp_tools = await mcp_client.get_tools_for_llm(server_ids)
+
+        # Create capability router for tool execution
+        capability_router = MCPCapabilityRouter(mcp_client)
+
+        # Build API parameters
+        api_params = {
+            "model": self.model,
+            "max_tokens": 8000,
+            "messages": [{"role": "user", "content": message}],
+        }
+
+        if system_prompt:
+            api_params["system"] = system_prompt
+
+        # Add MCP tools if available
+        if mcp_tools:
+            anthropic_tools = capability_router.format_tools_for_anthropic(mcp_tools)
+            api_params["tools"] = anthropic_tools
+
+        # Create Anthropic client
+        client = anthropic.Anthropic(api_key=self.api_key)
+
+        # Make API call
+        response = client.messages.create(**api_params)
+
+        # Extract text response
+        assistant_text = ""
+        for content_block in response.content:
+            if hasattr(content_block, "text"):
+                assistant_text += content_block.text
+
+        # Check for tool calls and execute them
+        tool_calls = capability_router.parse_anthropic_tool_calls(response)
+        if tool_calls:
+            # Execute tools via session's MCP client
+            tool_results = await capability_router.execute_tool_calls(tool_calls, mcp_tools)
+
+            # Create tool_result messages for continuation
+            tool_result_content = []
+            for original_call, result in zip(tool_calls, tool_results, strict=False):
+                tool_use_id = original_call.get("call_id")
+                if result.get("success"):
+                    result_content = str(result.get("result", ""))
+                    tool_result_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": result_content,
+                    })
+                else:
+                    error_msg = result.get("error", "Unknown error")
+                    tool_result_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": f"Error: {error_msg}",
+                        "is_error": True,
+                    })
+
+            # Continue conversation with tool results
+            if tool_result_content:
+                api_params["messages"].append({
+                    "role": "assistant",
+                    "content": response.content,
+                })
+                api_params["messages"].append({
+                    "role": "user",
+                    "content": tool_result_content,
+                })
+
+                # Get final response after tool execution
+                final_response = client.messages.create(**api_params)
+
+                # Extract final text
+                final_text = ""
+                for content_block in final_response.content:
+                    if hasattr(content_block, "text"):
+                        final_text += content_block.text
+
+                return final_text
+
+        return assistant_text
+
     async def _anthropic_api_call(self, message: str, system_prompt: str | None) -> str:
-        """Internal API call implementation"""
+        """Internal API call implementation (fallback for non-session mode)"""
         # Reuse existing ClaudeAgent implementation logic
         # This ensures compatibility while providing async interface
 

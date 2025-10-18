@@ -1,5 +1,6 @@
 """Unified console system for consistent CLI output formatting"""
 
+import threading
 from enum import Enum
 
 from rich.console import Console
@@ -193,11 +194,14 @@ Latest version:  [green]{latest_version}[/green]
 
 # Global console instance
 _console_instance: MCPConsole | None = None
+_console_instance_lock = threading.Lock()
 
 
 def get_console() -> MCPConsole:
     """Get shared console instance"""
     global _console_instance
-    if _console_instance is None:
-        _console_instance = MCPConsole()
+    if _console_instance is None:  # First check (optimization)
+        with _console_instance_lock:
+            if _console_instance is None:  # Second check (safety)
+                _console_instance = MCPConsole()
     return _console_instance
