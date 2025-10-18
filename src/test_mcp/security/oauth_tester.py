@@ -5,15 +5,15 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, Field
 
-from ..shared.progress_tracker import ProgressTracker, TestStatus
-from ..shared.result_models import BaseTestResult, ErrorType, TestType
+from ..shared.progress_tracker import ProgressTracker, ExecutionStatus
+from ..shared.result_models import BaseTestResult, ErrorType, SuiteCategory
 
 
 class AuthTestResult(BaseTestResult):
     """Result of OAuth/auth testing (extends BaseTestResult)"""
 
-    test_type: TestType = Field(
-        default=TestType.SECURITY, description="Test type identifier"
+    test_type: SuiteCategory = Field(
+        default=SuiteCategory.SECURITY, description="Test type identifier"
     )
 
     # Auth-specific fields
@@ -95,7 +95,7 @@ class OAuthTester:
                     start_time=datetime.now(),
                     end_time=datetime.now(),
                     duration=0.0,
-                    status=TestStatus.FAILED,
+                    status=ExecutionStatus.FAILED,
                     success=False,
                     bypass_successful=False,
                     access_granted=False,
@@ -139,8 +139,8 @@ class OAuthTester:
         if self.progress_tracker:
             self.progress_tracker.update_test_status(
                 test_id,
-                TestType.SECURITY,
-                TestStatus.RUNNING,
+                SuiteCategory.SECURITY,
+                ExecutionStatus.RUNNING,
                 step_description=f"Testing token: {description}",
             )
 
@@ -193,7 +193,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not bypass_successful,  # Success means no bypass
                 bypass_successful=bypass_successful,
                 access_granted=access_granted,
@@ -208,7 +208,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 bypass_successful=False,
                 access_granted=False,
@@ -252,8 +252,8 @@ class OAuthTester:
         if self.progress_tracker:
             self.progress_tracker.update_test_status(
                 test_id,
-                TestType.SECURITY,
-                TestStatus.RUNNING,
+                SuiteCategory.SECURITY,
+                ExecutionStatus.RUNNING,
                 step_description=f"Testing bypass: {description}",
             )
 
@@ -380,7 +380,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not bypass_successful,
                 bypass_successful=bypass_successful,
                 access_granted=access_granted,
@@ -395,7 +395,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 bypass_successful=False,
                 access_granted=False,
@@ -430,8 +430,8 @@ class OAuthTester:
         if self.progress_tracker:
             self.progress_tracker.update_test_status(
                 test_id,
-                TestType.SECURITY,
-                TestStatus.RUNNING,
+                SuiteCategory.SECURITY,
+                ExecutionStatus.RUNNING,
                 step_description="Testing session hijacking resistance",
             )
 
@@ -480,7 +480,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not bypass_successful,
                 bypass_successful=bypass_successful,
                 access_granted=bypass_successful,
@@ -495,7 +495,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 bypass_successful=False,
                 access_granted=False,
@@ -544,7 +544,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not bypass_successful,
                 bypass_successful=bypass_successful,
                 access_granted=bypass_successful,
@@ -559,7 +559,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 bypass_successful=False,
                 access_granted=False,
@@ -613,7 +613,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not bypass_successful,
                 bypass_successful=bypass_successful,
                 access_granted=bypass_successful,
@@ -628,7 +628,7 @@ class OAuthTester:
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 bypass_successful=False,
                 access_granted=False,

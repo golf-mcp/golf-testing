@@ -14,7 +14,7 @@ from rich.progress import (
 from rich.table import Table
 
 from .console_shared import get_console
-from .result_models import TestStatus, TestType
+from .result_models import ExecutionStatus, SuiteCategory
 
 
 @dataclass
@@ -22,8 +22,8 @@ class TestProgress:
     """Progress tracking for any test type"""
 
     test_id: str
-    test_type: TestType
-    status: TestStatus = TestStatus.QUEUED
+    test_type: SuiteCategory
+    status: ExecutionStatus = ExecutionStatus.QUEUED
     start_time: datetime | None = None
 
     # Generic progress tracking
@@ -85,14 +85,14 @@ class ProgressTracker:
         return self._async_lock
 
     def update_test_status(
-        self, test_id: str, test_type: TestType, status: TestStatus, **kwargs: Any
+        self, test_id: str, test_type: SuiteCategory, status: ExecutionStatus, **kwargs: Any
     ) -> None:
         """Thread-safe update of test status"""
         with self._thread_lock:
             self._update_test_status_impl(test_id, test_type, status, **kwargs)
 
     async def async_update_test_status(
-        self, test_id: str, test_type: TestType, status: TestStatus, **kwargs: Any
+        self, test_id: str, test_type: SuiteCategory, status: ExecutionStatus, **kwargs: Any
     ) -> None:
         """Async-safe update of test status"""
         async_lock = self._get_async_lock()
@@ -105,7 +105,7 @@ class ProgressTracker:
                 self._update_test_status_impl(test_id, test_type, status, **kwargs)
 
     def _update_test_status_impl(
-        self, test_id: str, test_type: TestType, status: TestStatus, **kwargs: Any
+        self, test_id: str, test_type: SuiteCategory, status: ExecutionStatus, **kwargs: Any
     ) -> None:
         """Core test status update implementation (already inside lock)"""
         if test_id not in self.test_progress:
@@ -123,7 +123,7 @@ class ProgressTracker:
             elif progress.details is not None:
                 progress.details[key] = value
 
-        if status in [TestStatus.COMPLETED, TestStatus.FAILED, TestStatus.TIMEOUT]:
+        if status in [ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.TIMEOUT]:
             self.progress.advance(self.overall_task, 1)
 
     def generate_status_table(self) -> Table:
@@ -136,12 +136,12 @@ class ProgressTracker:
         table.add_column("Current Activity", style="dim", width=35)
 
         status_icons = {
-            TestStatus.QUEUED: "...",
-            TestStatus.RUNNING: "🔄 RUNNING",
-            TestStatus.COMPLETED: "✅ PASSED",
-            TestStatus.FAILED: "❌ FAILED",
-            TestStatus.TIMEOUT: "⏱️ TIMEOUT",
-            TestStatus.SKIPPED: "⏭️ SKIP",
+            ExecutionStatus.QUEUED: "...",
+            ExecutionStatus.RUNNING: "🔄 RUNNING",
+            ExecutionStatus.COMPLETED: "✅ PASSED",
+            ExecutionStatus.FAILED: "❌ FAILED",
+            ExecutionStatus.TIMEOUT: "⏱️ TIMEOUT",
+            ExecutionStatus.SKIPPED: "⏭️ SKIP",
         }
 
         with self._thread_lock:
@@ -149,7 +149,7 @@ class ProgressTracker:
             running_tests = [
                 (id, p)
                 for id, p in self.test_progress.items()
-                if p.status == TestStatus.RUNNING
+                if p.status == ExecutionStatus.RUNNING
             ]
 
             # Sort by start time to show earliest tests first
@@ -171,7 +171,7 @@ class ProgressTracker:
             completed_tests = [
                 (id, p)
                 for id, p in self.test_progress.items()
-                if p.status in [TestStatus.COMPLETED, TestStatus.FAILED]
+                if p.status in [ExecutionStatus.COMPLETED, ExecutionStatus.FAILED]
             ]
 
             # Sort by completion time, show most recent first
@@ -222,8 +222,8 @@ class ProgressTracker:
             if test_id not in self.test_progress:
                 self.test_progress[test_id] = TestProgress(
                     test_id=test_id,
-                    test_type=TestType.CONVERSATION,
-                    status=TestStatus.RUNNING,
+                    test_type=SuiteCategory.CONVERSATION,
+                    status=ExecutionStatus.RUNNING,
                     start_time=current_time,
                     current_step=current_step or 0,
                     total_steps=total_steps or 1
@@ -244,7 +244,7 @@ class ProgressTracker:
 
             # Mark as completed if specified
             if completed:
-                progress.status = TestStatus.COMPLETED
+                progress.status = ExecutionStatus.COMPLETED
                 progress.details["end_time"] = current_time
 
             # Update Rich progress display
@@ -279,12 +279,12 @@ class ProgressTracker:
 
         # Update or create test progress entry using TestProgress objects
         if test_id not in self.test_progress:
-            from .result_models import TestType
+            from .result_models import SuiteCategory
 
             self.test_progress[test_id] = TestProgress(
                 test_id=test_id,
-                test_type=TestType.CONVERSATION,  # Default type
-                status=TestStatus.RUNNING,
+                test_type=SuiteCategory.CONVERSATION,  # Default type
+                status=ExecutionStatus.RUNNING,
                 start_time=current_time,
             )
 
@@ -296,7 +296,7 @@ class ProgressTracker:
 
         # Mark completed if specified
         if completed:
-            progress.status = TestStatus.COMPLETED
+            progress.status = ExecutionStatus.COMPLETED
             if progress.details is not None:
                 progress.details["end_time"] = current_time
 
@@ -306,7 +306,7 @@ class ProgressTracker:
     def _update_rich_progress(self):
         """Update Rich progress display"""
         completed_count = len(
-            [p for p in self.test_progress.values() if p.status == TestStatus.COMPLETED]
+            [p for p in self.test_progress.values() if p.status == ExecutionStatus.COMPLETED]
         )
         self.progress.update(self.overall_task, completed=completed_count)
 
@@ -319,21 +319,21 @@ class ProgressTracker:
                 [
                     p
                     for p in self.test_progress.values()
-                    if p.status == TestStatus.RUNNING
+                    if p.status == ExecutionStatus.RUNNING
                 ]
             )
             completed_count = len(
                 [
                     p
                     for p in self.test_progress.values()
-                    if p.status == TestStatus.COMPLETED
+                    if p.status == ExecutionStatus.COMPLETED
                 ]
             )
             failed_count = len(
                 [
                     p
                     for p in self.test_progress.values()
-                    if p.status == TestStatus.FAILED
+                    if p.status == ExecutionStatus.FAILED
                 ]
             )
 
@@ -352,7 +352,7 @@ class ProgressTracker:
                 running_tests = [
                     p
                     for p in self.test_progress.values()
-                    if p.status == TestStatus.RUNNING
+                    if p.status == ExecutionStatus.RUNNING
                 ]
                 if running_tests:
                     current_test = running_tests[0]

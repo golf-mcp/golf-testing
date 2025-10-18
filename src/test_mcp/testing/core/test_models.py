@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ...shared.result_models import TestStatus
+from ...shared.result_models import ExecutionStatus
 
 
 class TestResult(str, Enum):
@@ -108,7 +108,7 @@ class TestExecution(BaseModel):
 
     execution_id: str = Field(..., description="Unique execution ID")
     test_case: TestCase
-    status: TestStatus = TestStatus.QUEUED
+    status: ExecutionStatus = ExecutionStatus.QUEUED
     start_time: datetime = Field(default_factory=datetime.now)
     end_time: datetime | None = None
     duration_seconds: float | None = None

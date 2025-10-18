@@ -9,7 +9,7 @@ from .test_models import (
     TestExecution,
     TestResult,
     TestRun,
-    TestStatus,
+    ExecutionStatus,
     TestSuite,
     ToolCall,
 )
@@ -20,7 +20,7 @@ __all__ = [
     "TestExecution",
     "TestResult",
     "TestRun",
-    "TestStatus",
+    "ExecutionStatus",
     "TestSuite",
     "ToolCall",
 ]

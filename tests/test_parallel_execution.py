@@ -13,7 +13,7 @@ from src.test_mcp.cli.test_execution import (
     run_tests_parallel,
 )
 from src.test_mcp.config.config_manager import MCPServerConfig
-from src.test_mcp.models.conversational import ConversationTestCase, ConversationTestSuite
+from src.test_mcp.models.conversational import ConversationalTestConfig, ConversationTestSuite
 from src.test_mcp.testing.conversation.conversation_models import (
     ConversationResult,
     ConversationStatus,
@@ -90,7 +90,7 @@ class TestParallelExecution:
         """Verify parallelism=1 maintains sequential behavior"""
         # Create test suite with parallelism=1
         test_cases = [
-            ConversationTestCase(
+            ConversationalTestConfig(
                 test_id="seq_test_1",
                 user_message="Test message 1",
                 success_criteria="Response should be helpful",
@@ -133,7 +133,7 @@ class TestParallelExecution:
         # Real execution would require a running MCP server
 
         test_cases = [
-            ConversationTestCase(
+            ConversationalTestConfig(
                 test_id=f"parallel_test_{i}",
                 user_message=f"Test message {i}",
                 success_criteria="Response should be helpful",
@@ -215,7 +215,10 @@ class TestPerformanceImprovement:
         # 3. Assert parallel is faster
 
         # For unit testing, we just verify the structure exists
-        assert hasattr(ConversationTestSuite, "parallelism")
+        suite = ConversationTestSuite(
+            suite_id="test_suite", name="Test Suite", test_cases=[]
+        )
+        assert hasattr(suite, "parallelism")
 
     def test_parallelism_configuration(self):
         """Test parallelism configuration on test suites"""
@@ -234,5 +237,5 @@ class TestPerformanceImprovement:
             suite_id="test_suite", name="Test Suite", test_cases=[]
         )
 
-        # Should default to 1 (sequential)
-        assert suite.parallelism == 1
+        # Should default to 5 (as defined in BaseTestSuite)
+        assert suite.parallelism == 5

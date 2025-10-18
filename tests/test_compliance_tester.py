@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from test_mcp.shared.progress_tracker import TestStatus
-from test_mcp.shared.result_models import TestType
+from test_mcp.shared.progress_tracker import ExecutionStatus
+from test_mcp.shared.result_models import SuiteCategory
 from test_mcp.testing.compliance.mcp_compliance_tester import (
     MCPComplianceTester,
     MCPComplianceTestResult,
@@ -109,13 +109,13 @@ class TestMCPComplianceTester:
             message="Test message",
             start_time=datetime.now(),
             end_time=datetime.now(),
-            status=TestStatus.COMPLETED,
+            status=ExecutionStatus.COMPLETED,
             success=True,
             compliance_passed=True,
             duration=1.5,
         )
 
-        assert result.test_type == TestType.COMPLIANCE
+        assert result.test_type == SuiteCategory.COMPLIANCE
         assert result.check_name == "Test Check"
         assert result.severity == "high"
         assert result.success is True
