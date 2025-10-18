@@ -330,6 +330,7 @@ class MCPClientManager:
         self._connection_locks: dict[str, asyncio.Lock] = {}
         self._stdio_processes: dict[str, Any] = {}  # Track stdio subprocesses
         self._current_oauth_url: str | None = None  # Store current OAuth URL
+        self._master_lock = asyncio.Lock()  # Master lock for safe lock creation
 
     def _parse_command(self, command_str: str) -> tuple[str, list[str]]:
         """
@@ -982,6 +983,37 @@ The OAuth authorization code was received but token exchange failed.
                 f"Connection recovery failed for server {server_id}: {e}"
             ) from e
 
+    @asynccontextmanager
+    async def get_isolated_session(self, server_config: dict[str, Any]):
+        """
+        Create an isolated, task-local MCP session for parallel execution.
+
+        This context manager creates a fresh connection that is entered and exited
+        within the same asyncio task, avoiding the "cancel scope in different task"
+        error that occurs when sharing sessions across parallel tasks.
+
+        Args:
+            server_config: Server configuration dict with type, url, auth, etc.
+
+        Yields:
+            ClientSession: An isolated MCP client session
+
+        Example:
+            async with client_manager.get_isolated_session(config) as session:
+                result = await session.call_tool("tool_name", {"arg": "value"})
+        """
+        # Create a new connection context that will be entered/exited in this task
+        context_manager = self._get_connection_context(server_config)
+        try:
+            session = await context_manager.__aenter__()
+            yield session
+        finally:
+            # Always clean up the context in the same task
+            try:
+                await context_manager.__aexit__(None, None, None)
+            except Exception:
+                pass  # Suppress cleanup errors
+
     async def connect_server(self, server_config: dict[str, Any]) -> str:
         """
         Connect to an MCP server and maintain persistent connection.
@@ -993,7 +1025,10 @@ The OAuth authorization code was received but token exchange failed.
             server_id: Unique identifier for this server connection
         """
         server_id = str(uuid.uuid4())
-        self._connection_locks[server_id] = asyncio.Lock()
+        # Use master lock to safely create per-server locks
+        async with self._master_lock:
+            if server_id not in self._connection_locks:
+                self._connection_locks[server_id] = asyncio.Lock()
 
         try:
             # Create persistent connection context

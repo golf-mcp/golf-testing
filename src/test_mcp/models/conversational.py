@@ -12,6 +12,9 @@ class ConversationalTestConfig(BaseTestConfig):
     context_persistence: bool = Field(
         default=True, description="Whether to maintain conversation context"
     )
+    timeout_seconds: int | None = Field(
+        default=300, description="Maximum time in seconds for this test to complete"
+    )
 
 
 class ConversationTestSuite(BaseTestSuite):

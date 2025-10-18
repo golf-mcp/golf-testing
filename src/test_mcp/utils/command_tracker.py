@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 from datetime import datetime
 
 from ..config.config_manager import ConfigManager
@@ -101,11 +102,14 @@ class CommandTracker:
 
 # Global instance
 _command_tracker: CommandTracker | None = None
+_command_tracker_lock = threading.Lock()
 
 
 def get_command_tracker() -> CommandTracker:
     """Get shared command tracker instance"""
     global _command_tracker
-    if _command_tracker is None:
-        _command_tracker = CommandTracker()
+    if _command_tracker is None:  # First check (optimization)
+        with _command_tracker_lock:
+            if _command_tracker is None:  # Second check (safety)
+                _command_tracker = CommandTracker()
     return _command_tracker
