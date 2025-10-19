@@ -53,8 +53,38 @@ class ProviderInterface(ABC):
             message: The message to send
             system_prompt: Optional system prompt
             session_id: Optional session ID for parallel execution safety
+
+        Returns:
+            str: The assistant's response text
         """
         pass
+
+    async def send_message_with_metadata(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send message and get response with full metadata including tool usage
+
+        Args:
+            message: The message to send
+            system_prompt: Optional system prompt
+            session_id: Optional session ID for parallel execution safety
+
+        Returns:
+            dict: Contains 'response' (str), 'tools_used' (list), 'raw_messages' (list)
+        """
+        # Default implementation for backward compatibility
+        response = await self.send_message(message, system_prompt, session_id)
+        return {
+            "response": response,
+            "tools_used": [],
+            "raw_messages": [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": response},
+            ],
+        }
 
     @abstractmethod
     async def send_message_with_tools(
@@ -230,6 +260,30 @@ class AnthropicProvider(ProviderInterface):
 
             del self.sessions[session_id]
 
+    async def send_message_with_metadata(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send message and get response with full metadata including tool usage"""
+        # Use session-specific MCP client if session_id is provided
+        if session_id and session_id in self.sessions:
+            return await self._anthropic_api_call_with_session_and_metadata(
+                message, system_prompt, session_id
+            )
+        else:
+            # Fallback to basic implementation
+            response = await self.send_message(message, system_prompt, session_id)
+            return {
+                "response": response,
+                "tools_used": [],
+                "raw_messages": [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": response},
+                ],
+            }
+
     async def _anthropic_api_call_with_session(
         self, message: str, system_prompt: str | None, session_id: str
     ) -> str:
@@ -336,6 +390,160 @@ class AnthropicProvider(ProviderInterface):
                 return final_text
 
         return assistant_text
+
+    async def _anthropic_api_call_with_session_and_metadata(
+        self, message: str, system_prompt: str | None, session_id: str
+    ) -> dict[str, Any]:
+        """Internal API call with full metadata tracking"""
+        import anthropic
+        from ..mcp_client.capability_router import MCPCapabilityRouter
+
+        # Get session-specific MCP client
+        session = self.sessions[session_id]
+        mcp_client = session["mcp_client"]
+        server_ids = session["server_ids"]
+
+        # Get MCP tools from the session's MCP client
+        mcp_tools = []
+        if server_ids:
+            mcp_tools = await mcp_client.get_tools_for_llm(server_ids)
+
+        # Create capability router for tool execution
+        capability_router = MCPCapabilityRouter(mcp_client)
+
+        # Build API parameters
+        api_params = {
+            "model": self.model,
+            "max_tokens": 8000,
+            "messages": [{"role": "user", "content": message}],
+        }
+
+        if system_prompt:
+            api_params["system"] = system_prompt
+
+        # Add MCP tools if available
+        if mcp_tools:
+            anthropic_tools = capability_router.format_tools_for_anthropic(mcp_tools)
+            api_params["tools"] = anthropic_tools
+
+        # Create Anthropic client
+        client = anthropic.Anthropic(api_key=self.api_key)
+
+        # Track all messages and tool usage with detailed tool call info
+        all_messages = [{"role": "user", "content": message}]
+        tools_used = []
+        tool_calls_metadata = []  # Store detailed tool call information for each turn
+
+        # Make initial API call
+        response = client.messages.create(**api_params)
+
+        # Extract text response
+        assistant_text = ""
+        for content_block in response.content:
+            if hasattr(content_block, "text"):
+                assistant_text += content_block.text
+
+        # Check for tool calls and execute them
+        tool_calls = capability_router.parse_anthropic_tool_calls(response)
+
+        # Add assistant response to messages with tool call marker
+        assistant_message = {
+            "role": "assistant",
+            "content": response.content,
+            "_has_tool_calls": len(tool_calls) > 0,
+            "_tool_calls": [],  # Will populate with structured tool call data
+        }
+
+        if tool_calls:
+            # Track which tools were used and store metadata
+            for tool_call in tool_calls:
+                tool_name = tool_call.get("tool_name", "unknown")
+                tools_used.append(tool_name)
+
+                # Store structured tool call info for turn reconstruction
+                tool_call_info = {
+                    "tool_name": tool_name,
+                    "tool_input": tool_call.get("arguments", {}),
+                    "call_id": tool_call.get("call_id", ""),
+                }
+                assistant_message["_tool_calls"].append(tool_call_info)
+                tool_calls_metadata.append(tool_call_info)
+
+        all_messages.append(assistant_message)
+
+        if tool_calls:
+            # Execute tools via session's MCP client
+            tool_results = await capability_router.execute_tool_calls(
+                tool_calls, mcp_tools
+            )
+
+            # Create tool_result messages for continuation
+            tool_result_content = []
+            for original_call, result in zip(tool_calls, tool_results, strict=False):
+                tool_use_id = original_call.get("call_id")
+                if result.get("success"):
+                    result_content = str(result.get("result", ""))
+                    tool_result_content.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": result_content,
+                        }
+                    )
+                else:
+                    error_msg = result.get("error", "Unknown error")
+                    tool_result_content.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": f"Error: {error_msg}",
+                            "is_error": True,
+                        }
+                    )
+
+            # Continue conversation with tool results
+            if tool_result_content:
+                api_params["messages"].append(
+                    {
+                        "role": "assistant",
+                        "content": response.content,
+                    }
+                )
+                api_params["messages"].append(
+                    {
+                        "role": "user",
+                        "content": tool_result_content,
+                    }
+                )
+
+                # Add tool results to tracked messages
+                all_messages.append({"role": "user", "content": tool_result_content})
+
+                # Get final response after tool execution
+                final_response = client.messages.create(**api_params)
+
+                # Extract final text
+                final_text = ""
+                for content_block in final_response.content:
+                    if hasattr(content_block, "text"):
+                        final_text += content_block.text
+
+                # Add final response to messages
+                all_messages.append(
+                    {"role": "assistant", "content": final_response.content}
+                )
+
+                return {
+                    "response": final_text,
+                    "tools_used": tools_used,
+                    "raw_messages": all_messages,
+                }
+
+        return {
+            "response": assistant_text,
+            "tools_used": tools_used,
+            "raw_messages": all_messages,
+        }
 
     async def _anthropic_api_call(self, message: str, system_prompt: str | None) -> str:
         """Internal API call implementation (fallback for non-session mode)"""

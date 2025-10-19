@@ -33,8 +33,16 @@ def serialize_nested_models(obj):
         JSON-serializable version of the object with all Pydantic models converted to dicts
     """
     if hasattr(obj, "model_dump"):
-        # This is a Pydantic model - convert it
-        return serialize_nested_models(obj.model_dump())
+        # This is a Pydantic model - convert it using mode='json' for better compatibility
+        try:
+            return serialize_nested_models(obj.model_dump(mode="json"))
+        except Exception as e:
+            # If model_dump fails, try to get dict representation another way
+            try:
+                return serialize_nested_models(dict(obj))
+            except Exception:
+                # Last resort: convert to string representation
+                return f"<Serialization Error: {type(obj).__name__}: {str(e)[:100]}>"
     elif isinstance(obj, Enum):
         # Convert enum to its value
         return obj.value

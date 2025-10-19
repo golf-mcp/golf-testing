@@ -6,7 +6,7 @@ from .conversation_models import ConversationResult
 class ConversationJudge:
     """Enhanced judge for evaluating complete multi-turn conversations"""
 
-    def __init__(self, model: str = "gpt-5-2025-08-07", api_key: str | None = None):
+    def __init__(self, model: str = "gpt-4o", api_key: str | None = None):
         self.openai_client = OpenAIClientWrapper(model=model, api_key=api_key)
 
     def _create_conversation_evaluation_prompt(

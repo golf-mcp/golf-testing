@@ -82,11 +82,24 @@ def normalize_parallel_result(parallel_result: dict) -> dict:
         }
 
     # Determine success (same logic as execute_standard_test_flow line 1223-1231)
+    # Note: result_obj might be a dict (serialized) or object, handle both
+    if result_obj:
+        if isinstance(result_obj, dict):
+            result_obj_status = result_obj.get("status", "")
+        else:
+            result_obj_status = (
+                result_obj.status.value
+                if hasattr(result_obj.status, "value")
+                else str(result_obj.status)
+            )
+    else:
+        result_obj_status = ""
+
     success = (
         status == "completed"
         and result.get("success", False)
         and result_obj
-        and result_obj.status.value == "goal_achieved"
+        and result_obj_status == "goal_achieved"
     )
 
     # Extract timing
@@ -259,11 +272,33 @@ async def run_tests_parallel(
                         status="failed",
                         error_message=str(e),
                     )
-                raise
+
+                # Store the error to return after cleanup
+                error_result = {
+                    "test_case": {
+                        "test_id": test_case_def.test_id,
+                        "user_message": test_case_def.user_message,
+                        "success_criteria": test_case_def.success_criteria,
+                        "timeout_seconds": test_case_def.timeout_seconds,
+                        "metadata": test_case_def.metadata or {},
+                    },
+                    "result": None,
+                    "error": str(e),
+                    "status": "failed",
+                }
 
             finally:
-                # Clean up session
-                await provider.end_session(session_id)
+                # Clean up session (suppress cleanup errors to avoid masking original error)
+                try:
+                    await provider.end_session(session_id)
+                except Exception as cleanup_error:
+                    # Log cleanup errors but don't propagate them
+                    if progress_tracker:
+                        progress_tracker.update_test_status(
+                            test_id=test_case_def.test_id,
+                            status="cleanup_warning",
+                            error_message=f"Cleanup warning: {cleanup_error}",
+                        )
 
                 # Mark test as completed in progress tracker
                 if progress_tracker:
@@ -283,6 +318,10 @@ async def run_tests_parallel(
                         total_steps=4,
                         completed=True,
                     )
+
+            # Return error result if exception occurred
+            if "error_result" in locals():
+                return error_result
 
     # Execute tests concurrently
     tasks = [
@@ -393,21 +432,68 @@ async def execute_test_cases(
         # Normalize results to sequential format for compatibility
         for r in parallel_results:
             if isinstance(r, Exception):
-                # Handle exceptions from asyncio.gather
+                # Handle exceptions from asyncio.gather (including CancelledError)
                 results.append(
                     {
                         "test_id": f"test_{len(results)}",
                         "success": False,
-                        "message": f"Test execution failed: {r}",
+                        "message": f"Test execution failed: {type(r).__name__}: {r}",
                         "execution_time": 0.0,
                         "error": str(r),
                     }
                 )
-            else:
+            elif isinstance(r, dict):
+                # Only normalize if r is actually a dict result
                 results.append(normalize_parallel_result(r))
+            else:
+                # Handle unexpected result types
+                results.append(
+                    {
+                        "test_id": f"test_{len(results)}",
+                        "success": False,
+                        "message": f"Unexpected result type: {type(r).__name__}",
+                        "execution_time": 0.0,
+                        "error": f"Got {type(r).__name__} instead of dict",
+                    }
+                )
 
-        # Update successful_tests count
-        successful_tests = len([r for r in results if r.get("success", False)])
+        # Run judge evaluation on parallel results
+        evaluations = []
+        console.print("\n[bold]Running LLM Judge Evaluation...[/bold]")
+        try:
+            judge = ConversationJudge()
+            for result in results:
+                # Extract conversation result from normalized parallel format
+                conversation_result = result.get("result_obj")
+
+                if result.get("status") == "completed" and conversation_result:
+                    try:
+                        eval_result = judge.evaluate_conversation(
+                            conversation=conversation_result
+                        )
+                        evaluations.append(eval_result.model_dump())
+
+                        # Update result with evaluation
+                        result["evaluation"] = eval_result.model_dump()
+
+                        if verbose:
+                            console.print(
+                                f"  {'✅' if eval_result.success else '❌'} {result.get('test_id')}: "
+                                f"{'PASSED' if eval_result.success else 'FAILED'}"
+                            )
+                    except Exception as e:
+                        console.print(
+                            f"  [yellow]⚠️  {result.get('test_id')}: Judge evaluation failed - {e!s}[/yellow]"
+                        )
+        except Exception as e:
+            console.print(
+                f"[yellow]Judge evaluation initialization failed: {e!s}[/yellow]"
+            )
+
+        # Update successful_tests count based on judge evaluation
+        successful_tests = len(
+            [r for r in results if r.get("evaluation", {}).get("success", False)]
+        )
 
         # Skip to summary section (avoid sequential execution)
         execution_time = time.time() - start_time
@@ -422,13 +508,18 @@ async def execute_test_cases(
         console.print(f"Duration: {execution_time:.2f}s")
 
         # Show failed tests with details
-        failed_tests = [r for r in results if not r.get("success", True)]
+        failed_tests = [
+            r for r in results if not r.get("evaluation", {}).get("success", True)
+        ]
         if failed_tests:
             console.print("\n[bold red]Failed Tests:[/bold red]")
             for result in failed_tests:
                 test_id = result.get("test_id", "unknown")
-                error_msg = result.get("error", result.get("message", "Unknown error"))
-                console.print(f"  ❌ {test_id}: {error_msg}")
+                eval_data = result.get("evaluation", {})
+                reasoning = eval_data.get(
+                    "reasoning", result.get("message", "Unknown error")
+                )
+                console.print(f"  ❌ {test_id}: {reasoning[:100]}...")
 
         # Generate unique run ID and save results (same as sequential path)
         run_id = str(uuid.uuid4())
@@ -460,14 +551,14 @@ async def execute_test_cases(
         )
 
         try:
-            run_file, _eval_file = write_test_results_with_location(
+            run_file, eval_file = write_test_results_with_location(
                 run_id,
                 test_run,
-                [],
+                evaluations,
                 summary,
                 use_global_dir,
             )
-            _print_output_files(run_file)
+            _print_output_files(run_file, eval_file)
         except Exception as e:
             console.print(
                 f"[yellow]Warning: Could not save results to file: {e!s}[/yellow]"
@@ -1294,18 +1385,21 @@ def create_provider_from_config(server_config) -> ProviderInterface:
 async def run_conversation_with_provider(
     provider: ProviderInterface, test_case_def, session_id
 ) -> dict:
-    """Run conversation using provider interface"""
-    # This replaces the conversation manager logic with provider-based execution
-    # Maintains the same conversation flow but uses async provider interface
+    """Run conversation using provider interface with full tool tracking"""
     start_time = time.time()
 
     try:
         # Send the user message to the provider with session_id for isolated execution
-        response = await provider.send_message(
+        # Use the new metadata-tracking method
+        metadata = await provider.send_message_with_metadata(
             test_case_def.user_message,
             system_prompt="You are a helpful AI assistant testing MCP functionality.",
             session_id=session_id,
         )
+
+        response = metadata["response"]
+        tools_used = metadata["tools_used"]
+        raw_messages = metadata["raw_messages"]
 
         end_time = time.time()
         duration = end_time - start_time
@@ -1321,41 +1415,92 @@ async def run_conversation_with_provider(
             metadata=test_case_def.metadata or {},
         )
 
-        # Create conversation turns with proper speaker attribute
-        turns = [
-            ConversationTurn(
-                turn_number=1,
-                speaker="user",
-                message=test_case_def.user_message,
-                timestamp=datetime.fromtimestamp(start_time),
-            ),
-            ConversationTurn(
-                turn_number=2,
-                speaker="agent",
-                message=response,
-                timestamp=datetime.fromtimestamp(end_time),
-            ),
-        ]
+        # Build conversation turns from raw messages with tool call tracking
+        turns = []
+        turn_number = 1
+        current_time = start_time
+        time_per_message = duration / len(raw_messages) if raw_messages else duration
+
+        for msg in raw_messages:
+            role = msg.get("role")
+            content = msg.get("content")
+
+            # Extract text content if it's a list of content blocks
+            text_content = ""
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text_content += block.get("text", "")
+                    elif hasattr(block, "text"):
+                        text_content += block.text
+            else:
+                text_content = str(content) if content else ""
+
+            speaker = "user" if role == "user" else "agent"
+
+            # Extract tool calls if this is an assistant message with tools
+            tool_calls_list = []
+            if role == "assistant" and msg.get("_has_tool_calls"):
+                from ..testing.core.test_models import ToolCall
+
+                for tool_call_data in msg.get("_tool_calls", []):
+                    tool_calls_list.append(
+                        ToolCall(
+                            tool_name=tool_call_data.get("tool_name", "unknown"),
+                            server_name="mcp_server",  # Generic server name for parallel execution
+                            input_params=tool_call_data.get("tool_input", {}),
+                            result=None,  # Results come in subsequent messages
+                            error=None,
+                            execution_time_ms=None,
+                        )
+                    )
+
+            turns.append(
+                ConversationTurn(
+                    turn_number=turn_number,
+                    speaker=speaker,
+                    message=text_content,
+                    tool_calls=tool_calls_list,
+                    timestamp=datetime.fromtimestamp(current_time),
+                )
+            )
+            turn_number += 1
+            current_time += time_per_message
+
+        # Determine goal achievement based on tool usage
+        # If test expects tools and they were used, mark as goal achieved
+        # Otherwise, let the judge determine this
+        goal_achieved = len(tools_used) > 0 if tools_used else None
 
         # Create proper ConversationResult
+        # Determine status based on tool usage and goal achievement
+        if goal_achieved:
+            conv_status = ConversationStatus.GOAL_ACHIEVED
+        elif goal_achieved is False:
+            conv_status = ConversationStatus.GOAL_FAILED
+        else:
+            # If goal_achieved is None, let judge determine later
+            conv_status = ConversationStatus.ACTIVE
+
         conversation_result = ConversationResult(
             test_case=test_case,
             conversation_id=session_id,
             turns=turns,
-            status=ConversationStatus.GOAL_ACHIEVED,
-            completion_reason="Single turn response completed",
-            goal_achieved=True,  # Simplified - would need proper evaluation
+            status=conv_status,
+            completion_reason=f"Conversation completed with {len(tools_used)} tools used"
+            if tools_used
+            else "Conversation completed",
+            goal_achieved=goal_achieved
+            if goal_achieved is not None
+            else False,  # Let judge determine if no tools
             start_time=datetime.fromtimestamp(start_time),
             end_time=datetime.fromtimestamp(end_time),
             total_duration_seconds=duration,
-            total_turns=2,
-            user_turns=1,
-            agent_turns=1,
-            tools_used=[],  # Would be populated if tools were used
-            raw_conversation_data=[
-                {"role": "user", "content": test_case_def.user_message},
-                {"role": "assistant", "content": response},
-            ],
+            total_turns=len(turns),
+            user_turns=len([t for t in turns if t.speaker == "user"]),
+            agent_turns=len([t for t in turns if t.speaker == "agent"]),
+            tools_used=tools_used,
+            raw_conversation_data=raw_messages,
         )
 
         # Create result dict that maintains backward compatibility
@@ -1368,15 +1513,15 @@ async def run_conversation_with_provider(
                 "metadata": test_case_def.metadata or {},
             },
             "result": {
-                "status": {"value": "goal_achieved"},  # Simplified status
+                "status": {"value": "goal_achieved" if goal_achieved else "completed"},
                 "turns": [
-                    {"role": "user", "content": test_case_def.user_message},
-                    {"role": "assistant", "content": response},
+                    {"role": msg.get("role"), "content": msg.get("content")}
+                    for msg in raw_messages
                 ],
                 "duration": duration,
-                "success": True,  # Simplified success determination
+                "success": goal_achieved if goal_achieved is not None else False,
             },
-            "result_obj": conversation_result,  # Now a proper ConversationResult object
+            "result_obj": conversation_result,  # Now a proper ConversationResult object with tools
             "status": "completed",
         }
 
@@ -2029,7 +2174,10 @@ async def execute_security_test_real(
             return {
                 "success": results.overall_security_score >= 70,  # Pass threshold
                 "response_time": 0.0,  # Security tests don't track individual timing
-                "message": f"Security assessment completed: {results.overall_security_score:.1f}/100, {results.vulnerabilities_found} vulnerabilities",
+                "message": (
+                    f"Security assessment completed: {results.overall_security_score:.1f}/100, "
+                    f"{results.vulnerabilities_found} vulnerabilities"
+                ),
                 "security_result": results,
             }
         else:
