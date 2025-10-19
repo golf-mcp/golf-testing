@@ -41,7 +41,12 @@ class ProviderInterface(ABC):
         self.metrics = ProviderMetrics(provider=provider_type)
 
     @abstractmethod
-    async def send_message(self, message: str, system_prompt: str | None = None, session_id: str | None = None) -> str:
+    async def send_message(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """Send message and get response
 
         Args:
@@ -89,7 +94,12 @@ class AnthropicProvider(ProviderInterface):
         self.model = config.get("model", "claude-sonnet-4-20250514")
         self.sessions: dict[str, Any] = {}
 
-    async def send_message(self, message: str, system_prompt: str | None = None, session_id: str | None = None) -> str:
+    async def send_message(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """Send message using Anthropic API with session-specific MCP connections"""
         start_time = time.perf_counter()
         self.metrics.requests_made += 1
@@ -97,7 +107,9 @@ class AnthropicProvider(ProviderInterface):
         try:
             # Use session-specific MCP client if session_id is provided
             if session_id and session_id in self.sessions:
-                response = await self._anthropic_api_call_with_session(message, system_prompt, session_id)
+                response = await self._anthropic_api_call_with_session(
+                    message, system_prompt, session_id
+                )
             else:
                 # Fallback to non-session mode for backward compatibility
                 response = await self._anthropic_api_call(message, system_prompt)
@@ -218,7 +230,9 @@ class AnthropicProvider(ProviderInterface):
 
             del self.sessions[session_id]
 
-    async def _anthropic_api_call_with_session(self, message: str, system_prompt: str | None, session_id: str) -> str:
+    async def _anthropic_api_call_with_session(
+        self, message: str, system_prompt: str | None, session_id: str
+    ) -> str:
         """Internal API call implementation using session-specific MCP client"""
         import anthropic
         from ..mcp_client.capability_router import MCPCapabilityRouter
@@ -267,7 +281,9 @@ class AnthropicProvider(ProviderInterface):
         tool_calls = capability_router.parse_anthropic_tool_calls(response)
         if tool_calls:
             # Execute tools via session's MCP client
-            tool_results = await capability_router.execute_tool_calls(tool_calls, mcp_tools)
+            tool_results = await capability_router.execute_tool_calls(
+                tool_calls, mcp_tools
+            )
 
             # Create tool_result messages for continuation
             tool_result_content = []
@@ -275,30 +291,38 @@ class AnthropicProvider(ProviderInterface):
                 tool_use_id = original_call.get("call_id")
                 if result.get("success"):
                     result_content = str(result.get("result", ""))
-                    tool_result_content.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": result_content,
-                    })
+                    tool_result_content.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": result_content,
+                        }
+                    )
                 else:
                     error_msg = result.get("error", "Unknown error")
-                    tool_result_content.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": f"Error: {error_msg}",
-                        "is_error": True,
-                    })
+                    tool_result_content.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": f"Error: {error_msg}",
+                            "is_error": True,
+                        }
+                    )
 
             # Continue conversation with tool results
             if tool_result_content:
-                api_params["messages"].append({
-                    "role": "assistant",
-                    "content": response.content,
-                })
-                api_params["messages"].append({
-                    "role": "user",
-                    "content": tool_result_content,
-                })
+                api_params["messages"].append(
+                    {
+                        "role": "assistant",
+                        "content": response.content,
+                    }
+                )
+                api_params["messages"].append(
+                    {
+                        "role": "user",
+                        "content": tool_result_content,
+                    }
+                )
 
                 # Get final response after tool execution
                 final_response = client.messages.create(**api_params)

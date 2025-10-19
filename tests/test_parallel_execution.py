@@ -1,6 +1,7 @@
 """
 Test suite for parallel execution functionality
 """
+
 import asyncio
 import time
 from unittest.mock import AsyncMock, Mock, patch
@@ -13,7 +14,10 @@ from src.test_mcp.cli.test_execution import (
     run_tests_parallel,
 )
 from src.test_mcp.config.config_manager import MCPServerConfig
-from src.test_mcp.models.conversational import ConversationalTestConfig, ConversationTestSuite
+from src.test_mcp.models.conversational import (
+    ConversationalTestConfig,
+    ConversationTestSuite,
+)
 from src.test_mcp.testing.conversation.conversation_models import (
     ConversationResult,
     ConversationStatus,
@@ -109,9 +113,7 @@ class TestParallelExecution:
         )
 
         # Mock the run_single_test_case to avoid actual execution
-        with patch(
-            "src.test_mcp.cli.test_execution.run_single_test_case"
-        ) as mock_run:
+        with patch("src.test_mcp.cli.test_execution.run_single_test_case") as mock_run:
             mock_run.return_value = {
                 "test_id": "seq_test_1",
                 "success": True,

@@ -85,14 +85,22 @@ class ProgressTracker:
         return self._async_lock
 
     def update_test_status(
-        self, test_id: str, test_type: SuiteCategory, status: ExecutionStatus, **kwargs: Any
+        self,
+        test_id: str,
+        test_type: SuiteCategory,
+        status: ExecutionStatus,
+        **kwargs: Any,
     ) -> None:
         """Thread-safe update of test status"""
         with self._thread_lock:
             self._update_test_status_impl(test_id, test_type, status, **kwargs)
 
     async def async_update_test_status(
-        self, test_id: str, test_type: SuiteCategory, status: ExecutionStatus, **kwargs: Any
+        self,
+        test_id: str,
+        test_type: SuiteCategory,
+        status: ExecutionStatus,
+        **kwargs: Any,
     ) -> None:
         """Async-safe update of test status"""
         async_lock = self._get_async_lock()
@@ -105,7 +113,11 @@ class ProgressTracker:
                 self._update_test_status_impl(test_id, test_type, status, **kwargs)
 
     def _update_test_status_impl(
-        self, test_id: str, test_type: SuiteCategory, status: ExecutionStatus, **kwargs: Any
+        self,
+        test_id: str,
+        test_type: SuiteCategory,
+        status: ExecutionStatus,
+        **kwargs: Any,
     ) -> None:
         """Core test status update implementation (already inside lock)"""
         if test_id not in self.test_progress:
@@ -123,7 +135,11 @@ class ProgressTracker:
             elif progress.details is not None:
                 progress.details[key] = value
 
-        if status in [ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.TIMEOUT]:
+        if status in [
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.TIMEOUT,
+        ]:
             self.progress.advance(self.overall_task, 1)
 
     def generate_status_table(self) -> Table:
@@ -164,7 +180,7 @@ class ProgressTracker:
                     status_icons.get(progress.status, "?"),
                     f"{progress.current_step}/{progress.total_steps}",
                     f"{duration:.1f}s",
-                    activity[:34]  # Truncate long activities
+                    activity[:34],  # Truncate long activities
                 )
 
             # Show recent completions (success and failures)
@@ -176,21 +192,23 @@ class ProgressTracker:
 
             # Sort by completion time, show most recent first
             completed_tests.sort(
-                key=lambda x: x[1].details.get("end_time", datetime.now()) if x[1].details else datetime.now(),
-                reverse=True
+                key=lambda x: x[1].details.get("end_time", datetime.now())
+                if x[1].details
+                else datetime.now(),
+                reverse=True,
             )
 
             for test_id, progress in completed_tests[:5]:  # Show last 5 completed
                 duration = self._calculate_duration(progress)
                 status_icon = status_icons.get(progress.status, "?")
-                activity = progress.error_message[:30] if progress.error_message else "Completed successfully"
+                activity = (
+                    progress.error_message[:30]
+                    if progress.error_message
+                    else "Completed successfully"
+                )
 
                 table.add_row(
-                    test_id[:24],
-                    status_icon,
-                    "Done",
-                    f"{duration:.1f}s",
-                    activity
+                    test_id[:24], status_icon, "Done", f"{duration:.1f}s", activity
                 )
 
         return table
@@ -212,7 +230,7 @@ class ProgressTracker:
         step_description: str = "",
         completed: bool = False,
         current_step: int | None = None,
-        total_steps: int | None = None
+        total_steps: int | None = None,
     ) -> None:
         """Enhanced progress update for parallel test execution"""
         with self._thread_lock:
@@ -226,7 +244,7 @@ class ProgressTracker:
                     status=ExecutionStatus.RUNNING,
                     start_time=current_time,
                     current_step=current_step or 0,
-                    total_steps=total_steps or 1
+                    total_steps=total_steps or 1,
                 )
 
             progress = self.test_progress[test_id]
@@ -306,7 +324,11 @@ class ProgressTracker:
     def _update_rich_progress(self):
         """Update Rich progress display"""
         completed_count = len(
-            [p for p in self.test_progress.values() if p.status == ExecutionStatus.COMPLETED]
+            [
+                p
+                for p in self.test_progress.values()
+                if p.status == ExecutionStatus.COMPLETED
+            ]
         )
         self.progress.update(self.overall_task, completed=completed_count)
 

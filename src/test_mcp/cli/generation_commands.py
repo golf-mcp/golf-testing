@@ -238,6 +238,7 @@ def run_generation_wizard(console) -> GenerationRequest | None:
 
     # Generate default suite_id with timestamp and collision safety
     import uuid
+
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]  # Include milliseconds
     unique_id = uuid.uuid4().hex[:8]
     default_suite_id = f"{server_id}-generated-{timestamp}-{unique_id}"

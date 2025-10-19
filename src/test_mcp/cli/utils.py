@@ -142,7 +142,9 @@ def write_test_results_with_location(
 
     # Generate datetime prefix with collision safety
     # Add process ID, microseconds, and UUID for collision safety
-    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]  # Include milliseconds
+    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[
+        :-3
+    ]  # Include milliseconds
     unique_id = str(uuid.uuid4())[:8]
     filename_prefix = f"{datetime_str}_{os.getpid()}_{unique_id}_{run_id}"
 
@@ -186,7 +188,9 @@ def write_test_results(run_id: str, test_run, evaluations, summary):
 
     # Generate datetime prefix with collision safety
     # Add process ID, microseconds, and UUID for collision safety
-    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]  # Include milliseconds
+    datetime_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[
+        :-3
+    ]  # Include milliseconds
     unique_id = str(uuid.uuid4())[:8]
     filename_prefix = f"{datetime_str}_{os.getpid()}_{unique_id}_{run_id}"
 

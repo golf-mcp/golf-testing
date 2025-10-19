@@ -78,7 +78,7 @@ def normalize_parallel_result(parallel_result: dict) -> dict:
             "status": status,
             "test_case": test_case,
             "result": result,
-            "result_obj": result_obj
+            "result_obj": result_obj,
         }
 
     # Determine success (same logic as execute_standard_test_flow line 1223-1231)
@@ -104,14 +104,13 @@ def normalize_parallel_result(parallel_result: dict) -> dict:
             "success": result.get("success", False),
             "response_time": duration,
             "message": f"Conversation completed with {turns_count} turns",
-            "conversation_result": result_obj  # Sequential expects this key
+            "conversation_result": result_obj,  # Sequential expects this key
         },
-
         # Preserve parallel format fields for backward compatibility
         "status": status,
         "result_obj": result_obj,  # Keep for judge evaluation
         "result": result,
-        "test_case": test_case
+        "test_case": test_case,
     }
 
     return normalized
@@ -147,7 +146,12 @@ class TestRunConfiguration(BaseModel):
 
 
 async def run_tests_parallel(
-    test_suite, provider, max_parallelism=5, rate_limiter=None, suite_metrics=None, progress_tracker=None
+    test_suite,
+    provider,
+    max_parallelism=5,
+    rate_limiter=None,
+    suite_metrics=None,
+    progress_tracker=None,
 ):
     """Run tests concurrently using provider interface
 
@@ -173,7 +177,7 @@ async def run_tests_parallel(
                     test_id=test_case_def.test_id,
                     step_description="Queued, waiting for slot...",
                     current_step=0,
-                    total_steps=4
+                    total_steps=4,
                 )
 
             # Rate limiting
@@ -196,7 +200,7 @@ async def run_tests_parallel(
                         test_id=test_case_def.test_id,
                         step_description="Starting session...",
                         current_step=1,
-                        total_steps=4
+                        total_steps=4,
                     )
 
                 await provider.start_session(session_id)
@@ -207,7 +211,7 @@ async def run_tests_parallel(
                         test_id=test_case_def.test_id,
                         step_description="Running conversation...",
                         current_step=2,
-                        total_steps=4
+                        total_steps=4,
                     )
 
                 result = await run_conversation_with_provider(
@@ -233,7 +237,7 @@ async def run_tests_parallel(
                         test_id=test_case_def.test_id,
                         step_description="Cleaning up session...",
                         current_step=3,
-                        total_steps=4
+                        total_steps=4,
                     )
 
                 return result
@@ -253,7 +257,7 @@ async def run_tests_parallel(
                     progress_tracker.update_test_status(
                         test_id=test_case_def.test_id,
                         status="failed",
-                        error_message=str(e)
+                        error_message=str(e),
                     )
                 raise
 
@@ -265,15 +269,19 @@ async def run_tests_parallel(
                 if progress_tracker:
                     # Determine final status based on result
                     success = False
-                    if 'result' in locals():
-                        success = result.get("status") == "completed" and result.get("result", {}).get("success", False)
+                    if "result" in locals():
+                        success = result.get("status") == "completed" and result.get(
+                            "result", {}
+                        ).get("success", False)
 
                     progress_tracker.update_parallel_test_progress(
                         test_id=test_case_def.test_id,
-                        step_description="Completed successfully" if success else "Completed with errors",
+                        step_description="Completed successfully"
+                        if success
+                        else "Completed with errors",
                         current_step=4,
                         total_steps=4,
-                        completed=True
+                        completed=True,
                     )
 
     # Execute tests concurrently
@@ -343,7 +351,7 @@ async def execute_test_cases(
     )
 
     # Get parallelism from suite configuration
-    parallelism = getattr(suite_config, 'parallelism', 1)
+    parallelism = getattr(suite_config, "parallelism", 1)
 
     # Initialize progress tracker with dynamic parallelism
     progress_tracker = ProgressTracker(
@@ -367,11 +375,13 @@ async def execute_test_cases(
         suite_metrics = SuiteExecutionMetrics(
             suite_id=suite_config.suite_id,
             start_time=start_time,
-            parallelism_used=parallelism
+            parallelism_used=parallelism,
         )
 
         # Use Rich Live context for real-time progress updates (same as sequential path)
-        with Live(progress_tracker.progress, console=console.console, refresh_per_second=2):
+        with Live(
+            progress_tracker.progress, console=console.console, refresh_per_second=2
+        ):
             # Execute tests in parallel using existing infrastructure
             parallel_results = await run_tests_parallel(
                 suite_config,
@@ -379,20 +389,22 @@ async def execute_test_cases(
                 max_parallelism=parallelism,
                 rate_limiter=rate_limiter,
                 suite_metrics=suite_metrics,
-                progress_tracker=progress_tracker
+                progress_tracker=progress_tracker,
             )
 
         # Normalize results to sequential format for compatibility
         for r in parallel_results:
             if isinstance(r, Exception):
                 # Handle exceptions from asyncio.gather
-                results.append({
-                    "test_id": f"test_{len(results)}",
-                    "success": False,
-                    "message": f"Test execution failed: {r}",
-                    "execution_time": 0.0,
-                    "error": str(r)
-                })
+                results.append(
+                    {
+                        "test_id": f"test_{len(results)}",
+                        "success": False,
+                        "message": f"Test execution failed: {r}",
+                        "execution_time": 0.0,
+                        "error": str(r),
+                    }
+                )
             else:
                 results.append(normalize_parallel_result(r))
 
@@ -1260,6 +1272,7 @@ def create_provider_from_config(server_config) -> ProviderInterface:
 
     # Load .env file if present
     from dotenv import load_dotenv
+
     load_dotenv()
 
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
@@ -1527,7 +1540,9 @@ async def execute_standard_test_flow(
                 # Support both sequential and parallel formats
                 conversation_result = (
                     result.get("result_obj")  # Parallel format
-                    or result.get("details", {}).get("conversation_result")  # Sequential format
+                    or result.get("details", {}).get(
+                        "conversation_result"
+                    )  # Sequential format
                 )
 
                 if result.get("status") == "completed" and conversation_result:

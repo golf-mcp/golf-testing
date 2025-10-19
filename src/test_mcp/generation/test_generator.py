@@ -390,11 +390,11 @@ CRITICAL: success_criteria must be a single string, NOT an array of strings. Com
         os.makedirs(debug_dir, exist_ok=True)
 
         # Add collision safety with microseconds and unique ID
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # Include milliseconds
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[
+            :-3
+        ]  # Include milliseconds
         unique_id = uuid.uuid4().hex[:8]
-        debug_file = os.path.join(
-            debug_dir, f"json_error_{timestamp}_{unique_id}.txt"
-        )
+        debug_file = os.path.join(debug_dir, f"json_error_{timestamp}_{unique_id}.txt")
 
         self._save_debug_file(debug_file, error, result_text, original_text)
         self._log_error_context(error, result_text)

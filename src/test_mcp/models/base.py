@@ -24,7 +24,8 @@ class BaseTestSuite(BaseModel):
         description="Type of test suite (security, compliance, conversational)",
     )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Creation timestamp",
     )
     parallelism: int = Field(default=5, description="Concurrent execution limit")
 

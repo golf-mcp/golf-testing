@@ -4,6 +4,7 @@ Stress tests for singleton race conditions and thread safety
 These tests validate that all singleton implementations are thread-safe
 and prevent race conditions under high concurrency.
 """
+
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -35,7 +36,9 @@ class TestSingletonThreadSafety:
                 future.result()
 
         # Verify all threads got the same instance (same object ID)
-        assert len(set(results)) == 1, "Multiple instances created - race condition detected!"
+        assert len(set(results)) == 1, (
+            "Multiple instances created - race condition detected!"
+        )
 
     def test_console_singleton(self):
         """Test console singleton under high concurrency"""
@@ -52,7 +55,9 @@ class TestSingletonThreadSafety:
                 future.result()
 
         # Verify all threads got the same instance
-        assert len(set(results)) == 1, "Multiple instances created - race condition detected!"
+        assert len(set(results)) == 1, (
+            "Multiple instances created - race condition detected!"
+        )
 
     def test_command_tracker_singleton(self):
         """Test command tracker singleton under high concurrency"""
@@ -69,7 +74,9 @@ class TestSingletonThreadSafety:
                 future.result()
 
         # Verify all threads got the same instance
-        assert len(set(results)) == 1, "Multiple instances created - race condition detected!"
+        assert len(set(results)) == 1, (
+            "Multiple instances created - race condition detected!"
+        )
 
     def test_user_tracker_singleton(self):
         """Test user tracker singleton under high concurrency"""
@@ -86,7 +93,9 @@ class TestSingletonThreadSafety:
                 future.result()
 
         # Verify all threads got the same instance
-        assert len(set(results)) == 1, "Multiple instances created - race condition detected!"
+        assert len(set(results)) == 1, (
+            "Multiple instances created - race condition detected!"
+        )
 
     def test_all_singletons_together(self):
         """Test all singletons simultaneously under high concurrency"""
@@ -118,7 +127,9 @@ class TestSingletonThreadSafety:
         # Verify each singleton returned same instance across all threads
         for name, ids in results.items():
             unique_ids = set(ids)
-            assert len(unique_ids) == 1, f"{name} created multiple instances - race condition detected!"
+            assert len(unique_ids) == 1, (
+                f"{name} created multiple instances - race condition detected!"
+            )
 
 
 class TestProgressTrackerThreadSafety:
@@ -132,9 +143,7 @@ class TestProgressTrackerThreadSafety:
             # Simulate multiple updates to same test
             for i in range(5):
                 tracker.update_simple_progress(
-                    f"test_{test_id}",
-                    f"Step {i}",
-                    completed=(i == 4)
+                    f"test_{test_id}", f"Step {i}", completed=(i == 4)
                 )
                 time.sleep(0.001)  # Small delay to increase contention
 
@@ -158,7 +167,7 @@ class TestProgressTrackerThreadSafety:
                     step_description=f"Processing step {step}",
                     current_step=step,
                     total_steps=3,
-                    completed=(step == 2)
+                    completed=(step == 2),
                 )
                 time.sleep(0.001)
 
@@ -242,7 +251,9 @@ class TestFileNamingCollisions:
 
         # Generate 100 suite IDs concurrently
         with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = [executor.submit(generate_suite_id, "test_server") for _ in range(100)]
+            futures = [
+                executor.submit(generate_suite_id, "test_server") for _ in range(100)
+            ]
             for future in futures:
                 future.result()
 
@@ -272,7 +283,9 @@ class TestStressTests:
         # Verify consistency
         first_result = results[0]
         for result in results[1:]:
-            assert result == first_result, "Singleton consistency violated under extreme load!"
+            assert result == first_result, (
+                "Singleton consistency violated under extreme load!"
+            )
 
     def test_rapid_progress_updates(self):
         """Test rapid progress updates (stress test)"""

@@ -25,7 +25,12 @@ class OpenAIProvider(ProviderInterface):
         self.mcp_resources: list[dict[str, Any]] = []
         self.mcp_prompts: list[dict[str, Any]] = []
 
-    async def send_message(self, message: str, system_prompt: str | None = None, session_id: str | None = None) -> str:
+    async def send_message(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """Send message using OpenAI API"""
         start_time = time.perf_counter()
         self.metrics.requests_made += 1

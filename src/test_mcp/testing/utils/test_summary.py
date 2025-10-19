@@ -13,8 +13,12 @@ def generate_test_run_summary(test_run: TestRun) -> TestRunSummary:
     completed_tests = [
         e for e in test_run.executions if e.status == ExecutionStatus.COMPLETED
     ]
-    failed_tests = [e for e in test_run.executions if e.status == ExecutionStatus.FAILED]
-    timeout_tests = [e for e in test_run.executions if e.status == ExecutionStatus.TIMEOUT]
+    failed_tests = [
+        e for e in test_run.executions if e.status == ExecutionStatus.FAILED
+    ]
+    timeout_tests = [
+        e for e in test_run.executions if e.status == ExecutionStatus.TIMEOUT
+    ]
 
     total_duration = 0.0
     if test_run.start_time and test_run.end_time:
