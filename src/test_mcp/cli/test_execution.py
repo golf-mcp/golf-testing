@@ -47,6 +47,30 @@ from .utils import (
 )
 
 
+def should_enable_judge_evaluation(suite_type: str, parallelism: int) -> bool:
+    """Determine if judge evaluation should run based on suite type
+    
+    Args:
+        suite_type: Type of test suite (conversational, security, compliance)
+        parallelism: Parallelism setting for the suite
+        
+    Returns:
+        bool: True if judge evaluation should be enabled
+        
+    Rules:
+        - Conversational tests: Always get judge evaluation (regardless of parallelism)
+        - Security tests: Never get judge evaluation 
+        - Compliance tests: Never get judge evaluation
+        - Other types: Default behavior (parallelism > 1)
+    """
+    if suite_type == "conversational":
+        return True  # Always judge conversational tests
+    elif suite_type in ["security", "compliance"]:
+        return False  # Never judge security/compliance tests
+    else:
+        return parallelism > 1  # Default behavior for other types
+
+
 def normalize_parallel_result(parallel_result: dict) -> dict:
     """Transform parallel result format to sequential-compatible format
 
@@ -99,7 +123,8 @@ def normalize_parallel_result(parallel_result: dict) -> dict:
         status == "completed"
         and result.get("success", False)
         and result_obj
-        and result_obj_status == "goal_achieved"
+        # Removed result_obj_status == "goal_achieved" requirement
+        # Judge evaluation will determine final success
     )
 
     # Extract timing
@@ -741,6 +766,45 @@ async def execute_test_cases(
                                         f"    [dim]Summary: {security_report.critical_vulnerabilities} critical, {security_report.high_vulnerabilities} high, {security_report.medium_vulnerabilities} medium, {security_report.low_vulnerabilities} low[/dim]"
                                     )
 
+                # Add judge evaluation for conversational tests (sequential execution)
+                judge_enabled = should_enable_judge_evaluation(test_type, parallelism)
+                
+                if judge_enabled and "details" in result and "conversation_result" in result["details"]:
+                    try:
+                        conversation_result = result["details"]["conversation_result"]
+                        if conversation_result:
+                            # Initialize judge if not already done
+                            if 'judge' not in locals():
+                                judge = ConversationJudge()
+                            
+                            # Run judge evaluation
+                            judge_evaluation = judge.evaluate_conversation(conversation_result)
+                            
+                            # Add evaluation to result
+                            result["evaluation"] = {
+                                "overall_score": judge_evaluation.overall_score,
+                                "criteria_scores": judge_evaluation.criteria_scores,
+                                "reasoning": judge_evaluation.reasoning,
+                                "success": judge_evaluation.success
+                            }
+                            
+                            if verbose:
+                                console.print(f"  🏛️ [blue]Judge Score:[/blue] {judge_evaluation.overall_score:.1f}/10")
+                                if judge_evaluation.success:
+                                    console.print(f"  ✅ [green]Judge Decision: PASSED[/green]")
+                                else:
+                                    console.print(f"  ❌ [red]Judge Decision: FAILED[/red]")
+                    except Exception as judge_error:
+                        if verbose:
+                            console.print(f"  ⚠️ [yellow]Judge evaluation failed: {str(judge_error)}[/yellow]")
+                        # Add empty evaluation to maintain consistency
+                        result["evaluation"] = {
+                            "overall_score": 0.0,
+                            "criteria_scores": {},
+                            "reasoning": f"Judge evaluation failed: {str(judge_error)}",
+                            "success": False
+                        }
+
                 results.append(result)
 
             except Exception as e:
@@ -814,6 +878,14 @@ async def execute_test_cases(
 
     # Show final summary after live display ends
     execution_time = time.time() - start_time
+    
+    # Recalculate success count using judge evaluation when available (for consistent reporting)
+    judge_enabled = should_enable_judge_evaluation(test_type, parallelism)
+    if judge_enabled:
+        # For tests with judge evaluation, use judge success for counting
+        successful_tests = len([r for r in results if r.get("evaluation", {}).get("success", False)])
+    # Otherwise keep the original execution-based count
+    
     pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
 
     console.print("\n[bold]Test Execution Summary:[/bold]")

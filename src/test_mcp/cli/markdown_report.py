@@ -86,14 +86,19 @@ def _generate_test_results_overview(data: dict) -> str:
 
     for result in results:
         test_id = result.get("test_id", "Unknown")
-        # Use evaluation success instead of conversation success
+        # Always use judge evaluation when available, fall back to execution success
         evaluation = result.get("evaluation", {})
-        success = evaluation.get("success", False)
-        overall_score = evaluation.get("overall_score", 0.0)
+        if evaluation:  # Judge evaluation available
+            success = evaluation.get("success", False)
+            overall_score = evaluation.get("overall_score", 0.0)
+        else:  # No judge evaluation (security/compliance), use execution success
+            success = result.get("success", False)
+            overall_score = 0.0  # No score available for non-judged tests
         duration = result.get("execution_time", 0.0)
 
         status = "✅ PASS" if success else "❌ FAIL"
-        lines.append(f"| {status} | `{test_id}` | {duration:.2f}s | {overall_score:.1f}/10 |")
+        score_display = f"{overall_score:.1f}/10" if evaluation else "N/A"
+        lines.append(f"| {status} | `{test_id}` | {duration:.2f}s | {score_display} |")
 
     return "\n".join(lines)
 
