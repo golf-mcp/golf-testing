@@ -81,11 +81,18 @@ Analyze the agent's response and decide how to proceed. You have several options
 5. **ERROR** - Something went wrong (agent error, unexpected behavior)
 
 ## DECISION RULES:
-- If the agent achieved the goal from the test case → COMPLETE_SUCCESS
+- If the agent has FULLY COMPLETED the goal AND provided the final deliverable → COMPLETE_SUCCESS
+- If the agent is making progress but needs to perform additional actions (tool calls, data processing) → CONTINUE
 - If the agent is asking for reasonable information you would have → CONTINUE (provide the info)
 - If the agent refuses to help or errors out → COMPLETE_FAILURE
 - If the agent keeps asking the same questions → STUCK
 - If the agent response contains errors or doesn't make sense → ERROR
+
+## MULTI-STEP WORKFLOW GUIDANCE:
+- If agent calls tools and states intention to do more work (e.g., "Now I'll get more details...") → CONTINUE
+- If agent gathers data but hasn't synthesized/formatted the final answer → CONTINUE
+- Only mark COMPLETE_SUCCESS when the agent has delivered the final requested output to you
+- Consider partial progress as "working toward goal" not "goal achieved"
 
 ## RESPONSE FORMAT:
 Respond with a JSON object in this exact format:
