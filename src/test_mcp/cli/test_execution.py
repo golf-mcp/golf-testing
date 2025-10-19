@@ -1467,32 +1467,19 @@ async def run_conversation_with_provider(
             turn_number += 1
             current_time += time_per_message
 
-        # Determine goal achievement based on tool usage
-        # If test expects tools and they were used, mark as goal achieved
-        # Otherwise, let the judge determine this
-        goal_achieved = len(tools_used) > 0 if tools_used else None
-
-        # Create proper ConversationResult
-        # Determine status based on tool usage and goal achievement
-        if goal_achieved:
-            conv_status = ConversationStatus.GOAL_ACHIEVED
-        elif goal_achieved is False:
-            conv_status = ConversationStatus.GOAL_FAILED
-        else:
-            # If goal_achieved is None, let judge determine later
-            conv_status = ConversationStatus.ACTIVE
+        # Don't override goal achievement based on tool usage alone
+        # Let the conversation manager and UserSimulator determine completion properly
+        # The judge will evaluate the actual goal achievement later
+        goal_achieved = None  # Always let judge determine this
+        conv_status = ConversationStatus.ACTIVE  # Default to active, judge will determine final status
 
         conversation_result = ConversationResult(
             test_case=test_case,
             conversation_id=session_id,
             turns=turns,
             status=conv_status,
-            completion_reason=f"Conversation completed with {len(tools_used)} tools used"
-            if tools_used
-            else "Conversation completed",
-            goal_achieved=goal_achieved
-            if goal_achieved is not None
-            else False,  # Let judge determine if no tools
+            completion_reason="Conversation completed - goal achievement to be determined by judge",
+            goal_achieved=False,  # Will be updated by judge evaluation
             start_time=datetime.fromtimestamp(start_time),
             end_time=datetime.fromtimestamp(end_time),
             total_duration_seconds=duration,
@@ -1513,13 +1500,13 @@ async def run_conversation_with_provider(
                 "metadata": test_case_def.metadata or {},
             },
             "result": {
-                "status": {"value": "goal_achieved" if goal_achieved else "completed"},
+                "status": {"value": "completed"},  # Judge will determine if goal achieved
                 "turns": [
                     {"role": msg.get("role"), "content": msg.get("content")}
                     for msg in raw_messages
                 ],
                 "duration": duration,
-                "success": goal_achieved if goal_achieved is not None else False,
+                "success": False,  # Judge will determine actual success
             },
             "result_obj": conversation_result,  # Now a proper ConversationResult object with tools
             "status": "completed",

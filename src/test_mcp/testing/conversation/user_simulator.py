@@ -162,7 +162,7 @@ Respond with ONLY the JSON object, no additional text."""
             response_data, raw_response = (
                 self.openai_client.create_completion_with_json_parsing(
                     messages=messages,
-                    max_tokens=500,
+                    max_tokens=2000,
                     temperature=self.config.user_simulator_temperature,
                     fallback_data=fallback_data,
                 )
