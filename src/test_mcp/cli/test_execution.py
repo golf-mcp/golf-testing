@@ -459,7 +459,7 @@ async def execute_test_cases(
 
         # Run judge evaluation on parallel results
         evaluations = []
-        console.print("\n[bold]Running LLM Judge Evaluation...[/bold]")
+        console.print("\n[bold]Running Evaluation...[/bold]")
         try:
             judge = ConversationJudge()
             for result in results:
@@ -1254,7 +1254,7 @@ def get_multi_provider_config_from_env(
         elif provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             if api_key:
-                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-4o"}
+                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-5-2025-08-07"}
         elif provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if api_key:
@@ -1676,7 +1676,7 @@ async def execute_standard_test_flow(
     # Run judge evaluation if not skipped
     evaluations = []
     if not skip_judge and test_results:
-        console.print("\nRunning LLM evaluation...")
+        console.print("\nRunning Evaluation...")
         try:
             judge = ConversationJudge()
             for result in test_results:

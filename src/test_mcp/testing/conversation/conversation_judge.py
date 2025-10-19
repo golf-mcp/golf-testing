@@ -6,7 +6,7 @@ from .conversation_models import ConversationResult
 class ConversationJudge:
     """Enhanced judge for evaluating complete multi-turn conversations"""
 
-    def __init__(self, model: str = "gpt-4o", api_key: str | None = None):
+    def __init__(self, model: str = "gpt-5-2025-08-07", api_key: str | None = None):
         self.openai_client = OpenAIClientWrapper(model=model, api_key=api_key)
 
     def _create_conversation_evaluation_prompt(
@@ -145,13 +145,11 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                 {"role": "user", "content": prompt},
             ]
 
-            evaluation_data, _raw_response = (
-                self.openai_client.create_completion_with_json_parsing(
-                    messages=messages,
-                    max_tokens=1200,  # More tokens for conversation analysis
-                    temperature=0.1,
-                    fallback_data=fallback_data,
-                )
+            evaluation_data, _raw_response = self.openai_client.create_completion_with_json_parsing(
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.1,
+                fallback_data=fallback_data,
             )
 
             # Create JudgeEvaluation object using new unified model

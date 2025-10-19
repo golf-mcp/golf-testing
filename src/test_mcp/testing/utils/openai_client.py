@@ -11,7 +11,7 @@ class OpenAIClientWrapper:
     Handles o3 model temperature restrictions and consistent JSON parsing.
     """
 
-    def __init__(self, model: str = "gpt-4o", api_key: str | None = None):
+    def __init__(self, model: str = "gpt-5-2025-08-07", api_key: str | None = None):
         self.model = model
         self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
 
@@ -45,8 +45,8 @@ class OpenAIClientWrapper:
             "max_completion_tokens": max_tokens,
         }
 
-        # Only add temperature for non-o3 models (o3 models only support default temperature)
-        if not self.model.startswith("o3"):
+        # Only add temperature for models that support it (o3 and gpt-5 only support default temperature)
+        if not self.model.startswith("o3") and not self.model.startswith("gpt-5"):
             api_params["temperature"] = temperature
 
         # Enable JSON mode for structured responses

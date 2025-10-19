@@ -76,7 +76,7 @@ class ConversationConfig(BaseModel):
     max_turns: int = 20
     timeout_seconds: int = 300  # 5 minutes total conversation timeout
     turn_timeout_seconds: int = 60  # Per-turn timeout
-    user_simulator_model: str = "gpt-4o"
+    user_simulator_model: str = "gpt-5-2025-08-07"
     user_simulator_temperature: float = 0.3  # Slightly creative but consistent
 
     # Behavioral settings
