@@ -366,8 +366,6 @@ async def execute_test_cases(
     # ==== PARALLEL EXECUTION PATH ====
     # Route through parallel infrastructure when parallelism > 1
     if parallelism > 1:
-        console.print(f"Running {len(test_cases)} tests with parallelism={parallelism}")
-
         # Create provider for parallel execution
         provider = create_provider_from_config(server_config)
 
