@@ -344,7 +344,7 @@ class AnthropicProvider(ProviderInterface):
             for original_call, result in zip(tool_calls, tool_results, strict=False):
                 tool_use_id = original_call.get("call_id")
                 if result.get("success"):
-                    result_content = str(result.get("result", ""))
+                    result_content = str(result.get("content", ""))
                     tool_result_content.append(
                         {
                             "type": "tool_result",
@@ -482,7 +482,7 @@ class AnthropicProvider(ProviderInterface):
             for original_call, result in zip(tool_calls, tool_results, strict=False):
                 tool_use_id = original_call.get("call_id")
                 if result.get("success"):
-                    result_content = str(result.get("result", ""))
+                    result_content = str(result.get("content", ""))
                     tool_result_content.append(
                         {
                             "type": "tool_result",
