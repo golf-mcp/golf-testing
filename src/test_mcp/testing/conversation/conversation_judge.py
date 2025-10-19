@@ -147,7 +147,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
 
             evaluation_data, _raw_response = self.openai_client.create_completion_with_json_parsing(
                 messages=messages,
-                max_tokens=2000,
+                max_tokens=50000,
                 temperature=0.1,
                 fallback_data=fallback_data,
             )
