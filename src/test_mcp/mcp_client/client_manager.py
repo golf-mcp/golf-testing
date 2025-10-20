@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
+from pydantic import AnyUrl
 from rich.console import Console
 from rich.panel import Panel
 
@@ -92,20 +93,6 @@ class SharedTokenStorage(TokenStorage):
             if storage_key not in cls._instances:
                 cls._instances[storage_key] = cls(storage_key)
             return cls._instances[storage_key]
-
-    @classmethod
-    def clear_all(cls) -> None:
-        """Clear all shared token storage instances and their data."""
-        with cls._lock:
-            # First, clear token data from all existing instances
-            for instance in cls._instances.values():
-                with instance._instance_lock:
-                    instance.tokens = None
-                    instance.client_info = None
-                    instance._cleanup_event.set()  # Signal cleanup completed
-
-            # Then clear the instance registry
-            cls._instances.clear()
 
     async def get_tokens(self) -> OAuthToken | None:
         """Get stored tokens."""
@@ -251,7 +238,7 @@ class CallbackServer:
         self.port = port or find_free_port()
         self.server = None
         self.thread = None
-        self.callback_data = None
+        self.callback_data: dict[str, Any] | None = None
         # Improved synchronization
         self.callback_event = threading.Event()
         self.callback_lock = threading.Lock()
@@ -814,11 +801,19 @@ Please visit this URL to authorize the MCP Testing Framework:
                             await asyncio.wait_for(session.initialize(), timeout=30.0)
                             yield session
                     finally:
-                        # Clean up flow-specific callback server
+                        # Clean up flow-specific callback server with safe deletion
                         async with self._callback_lock:
                             if flow_id in self._active_callback_servers:
-                                self._active_callback_servers[flow_id].stop()
-                                del self._active_callback_servers[flow_id]
+                                try:
+                                    self._active_callback_servers[flow_id].stop()
+                                except Exception as stop_error:
+                                    print(
+                                        f"Warning: Error stopping callback server: {stop_error}",
+                                        file=sys.stderr,
+                                    )
+                                finally:
+                                    # Use pop with default to safely remove even if already deleted
+                                    self._active_callback_servers.pop(flow_id, None)
                 return
             except Exception as e:
                 console = Console()
@@ -890,7 +885,7 @@ The OAuth authorization code was received but token exchange failed.
 
 [yellow]Common Causes:[/yellow]
 • Server OAuth token endpoint is not working correctly
-• Client credentials or OAuth configuration is invalid  
+• Client credentials or OAuth configuration is invalid
 • Network connectivity issues during token exchange
 • Server-side token validation errors
 
@@ -945,35 +940,65 @@ The OAuth authorization code was received but token exchange failed.
                 auth_token = f"Bearer {auth_token}"
             headers["Authorization"] = auth_token
 
-        # Follow the example pattern: nested async context managers
-        try:
-            async with streamablehttp_client(url, headers=headers) as (
-                read_stream,
-                write_stream,
-                _,
-            ):
-                client_info = Implementation(
-                    name="mcp-testing-framework", version="1.0.0"
-                )
-                async with ClientSession(
-                    read_stream, write_stream, client_info=client_info
-                ) as session:
-                    await asyncio.wait_for(session.initialize(), timeout=30.0)
-                    yield session
-        except Exception as e:
-            # Convert connection errors to more user-friendly messages
-            if "SSL" in str(e) or "certificate" in str(e).lower():
+        # Follow the example pattern: nested async context managers with retry logic
+        max_retries = 3
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                async with streamablehttp_client(url, headers=headers) as (
+                    read_stream,
+                    write_stream,
+                    _,
+                ):
+                    client_info = Implementation(
+                        name="mcp-testing-framework", version="1.0.0"
+                    )
+                    async with ClientSession(
+                        read_stream, write_stream, client_info=client_info
+                    ) as session:
+                        await asyncio.wait_for(session.initialize(), timeout=30.0)
+                        yield session
+                        return  # Success - exit retry loop
+            except (TimeoutError, Exception) as e:
+                last_exception = e
+                # Check if it's a retryable error (timeout or connection issue)
+                is_timeout = isinstance(e, TimeoutError) or "timeout" in str(e).lower() or "ConnectTimeout" in str(e)
+                is_connection_error = "Connection refused" in str(e) or "ConnectError" in str(e)
+
+                if attempt < max_retries - 1 and (is_timeout or is_connection_error):
+                    # Wait with exponential backoff before retrying
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    print(
+                        f"Connection attempt {attempt + 1}/{max_retries} failed for '{url}': {e}. "
+                        f"Retrying in {wait_time}s...",
+                        file=sys.stderr,
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    # Final attempt failed or non-retryable error - raise with context
+                    break
+
+        # All retries exhausted - convert to user-friendly error
+        if last_exception:
+            if "SSL" in str(last_exception) or "certificate" in str(last_exception).lower():
                 raise RuntimeError(
-                    f"SSL/Certificate error connecting to '{url}': {e}"
-                ) from e
-            elif "Connection refused" in str(e) or "ConnectError" in str(e):
+                    f"SSL/Certificate error connecting to '{url}': {last_exception}"
+                ) from last_exception
+            elif "Connection refused" in str(last_exception) or "ConnectError" in str(last_exception):
                 raise RuntimeError(
-                    f"Cannot connect to server '{url}': Connection refused. Please verify the server is running."
-                ) from e
+                    f"Cannot connect to server '{url}': Connection refused after {max_retries} attempts. "
+                    f"Please verify the server is running."
+                ) from last_exception
+            elif "timeout" in str(last_exception).lower() or "ConnectTimeout" in str(last_exception):
+                raise RuntimeError(
+                    f"Connection timeout to '{url}' after {max_retries} attempts: {last_exception}"
+                ) from last_exception
             else:
                 raise RuntimeError(
-                    f"Failed to connect to MCP server '{url}': {e}"
-                ) from e
+                    f"Failed to connect to MCP server '{url}' after {max_retries} attempts: {last_exception}"
+                ) from last_exception
 
     async def _recover_connection(self, server_id: str) -> None:
         """
@@ -1248,7 +1273,9 @@ The OAuth authorization code was received but token exchange failed.
 
             try:
                 # Use persistent session
-                result = await connection.session.read_resource(resource_uri)
+                # Convert string URI to AnyUrl for type safety
+                uri = AnyUrl(resource_uri)
+                result = await connection.session.read_resource(uri)
 
                 # Parse result content
                 if hasattr(result, "contents"):
@@ -1416,30 +1443,35 @@ The OAuth authorization code was received but token exchange failed.
         """
         Disconnect from an MCP server and clean up persistent connection.
         """
-        if server_id in self.connections:
-            # Clean up active context if it exists
-            if server_id in self._active_contexts:
-                try:
-                    await self._active_contexts[server_id].__aexit__(None, None, None)
-                except Exception as e:
-                    print(
-                        f"Warning: Error closing connection context for {server_id}: {e}",
-                        file=sys.stderr,
-                    )
-                    print("Full traceback:", file=sys.stderr)
-                    traceback.print_exc(file=sys.stderr)
-                del self._active_contexts[server_id]
+        # Use master lock to prevent race conditions during cleanup
+        async with self._master_lock:
+            if server_id in self.connections:
+                # Clean up active context if it exists
+                if server_id in self._active_contexts:
+                    try:
+                        await self._active_contexts[server_id].__aexit__(None, None, None)
+                    except Exception as e:
+                        print(
+                            f"Warning: Error closing connection context for {server_id}: {e}",
+                            file=sys.stderr,
+                        )
+                        print("Full traceback:", file=sys.stderr)
+                        traceback.print_exc(file=sys.stderr)
+                    del self._active_contexts[server_id]
 
-            # Clean up connection lock
-            if server_id in self._connection_locks:
-                del self._connection_locks[server_id]
+                # Clean up connection lock
+                if server_id in self._connection_locks:
+                    del self._connection_locks[server_id]
 
-            del self.connections[server_id]
+                del self.connections[server_id]
 
     async def disconnect_all(self):
         """Disconnect from all MCP servers and clean up persistent connections"""
+        # Create snapshot of contexts before cleanup to avoid iteration issues
+        contexts_to_cleanup = list(self._active_contexts.items())
+
         # Clean up all active contexts
-        for server_id, context_manager in list(self._active_contexts.items()):
+        for server_id, context_manager in contexts_to_cleanup:
             try:
                 await context_manager.__aexit__(None, None, None)
             except Exception as e:
@@ -1450,10 +1482,11 @@ The OAuth authorization code was received but token exchange failed.
                 print("Full traceback:", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
 
-        # Clear all registries
-        self._active_contexts.clear()
-        self._connection_locks.clear()
-        self.connections.clear()
+        # Clear all registries with lock protection to prevent race conditions
+        async with self._master_lock:
+            self._active_contexts.clear()
+            self._connection_locks.clear()
+            self.connections.clear()
 
     def force_disconnect_all(self):
         """Force disconnect from all MCP servers without awaiting cleanup"""
