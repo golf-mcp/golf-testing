@@ -129,12 +129,39 @@ The CLI automatically checks for updates and displays notifications after comman
   "suite_id": "test_suite",
   "name": "Test Suite Name",
   "test_cases": [{
-    "test_id": "test_case_id", 
+    "test_id": "test_case_id",
     "user_message": "Test message",
     "success_criteria": "Expected outcome"
   }]
 }
 ```
+
+### Timeout Configuration
+
+MCP servers can be configured with custom timeouts for tool execution and connection establishment:
+
+**Server Config with Timeouts**:
+```json
+{
+  "url": "https://your-mcp-server.com/mcp",
+  "name": "server_name",
+  "tool_timeout": 90,
+  "connection_timeout": 30
+}
+```
+
+**Timeout Fields**:
+- `tool_timeout` (default: 60): Maximum seconds to wait for a tool execution to complete
+- `connection_timeout` (default: 30): Maximum seconds to wait for initial connection establishment
+
+**When to Adjust Timeouts**:
+- Increase `tool_timeout` for servers with complex queries or slow APIs (e.g., 90-120s)
+- Increase `connection_timeout` for servers over slow networks (e.g., 45-60s)
+- Keep defaults for fast, local servers
+
+**Error Messages**:
+- "Tool execution timeout" → increase `tool_timeout`
+- "Connection timeout" → increase `connection_timeout`
 
 ## Development Setup
 

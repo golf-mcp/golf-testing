@@ -686,7 +686,8 @@ Please visit this URL to authorize the MCP Testing Framework:
             async with ClientSession(
                 read_stream, write_stream, client_info=client_info
             ) as session:
-                await asyncio.wait_for(session.initialize(), timeout=30.0)
+                connection_timeout = server_config.get("connection_timeout", 30)
+                await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
                 yield session
 
         except Exception as e:
@@ -798,7 +799,8 @@ Please visit this URL to authorize the MCP Testing Framework:
                         async with ClientSession(
                             read_stream, write_stream, client_info=client_info
                         ) as session:
-                            await asyncio.wait_for(session.initialize(), timeout=30.0)
+                            connection_timeout = server_config.get("connection_timeout", 30)
+                            await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
                             yield session
                     finally:
                         # Clean up flow-specific callback server with safe deletion
@@ -957,7 +959,8 @@ The OAuth authorization code was received but token exchange failed.
                     async with ClientSession(
                         read_stream, write_stream, client_info=client_info
                     ) as session:
-                        await asyncio.wait_for(session.initialize(), timeout=30.0)
+                        connection_timeout = server_config.get("connection_timeout", 30)
+                        await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
                         yield session
                         return  # Success - exit retry loop
             except (TimeoutError, Exception) as e:
@@ -992,8 +995,10 @@ The OAuth authorization code was received but token exchange failed.
                     f"Please verify the server is running."
                 ) from last_exception
             elif "timeout" in str(last_exception).lower() or "ConnectTimeout" in str(last_exception):
+                connection_timeout = server_config.get("connection_timeout", 30)
                 raise RuntimeError(
-                    f"Connection timeout to '{url}' after {max_retries} attempts: {last_exception}"
+                    f"Connection timeout to '{url}' after {max_retries} attempts "
+                    f"(timeout: {connection_timeout}s per attempt): {last_exception}"
                 ) from last_exception
             else:
                 raise RuntimeError(
@@ -1211,9 +1216,15 @@ The OAuth authorization code was received but token exchange failed.
                         "error": f"Connection recovery failed: {e!s}",
                     }
 
+            # Get timeout from server config (new field with default)
+            tool_timeout = connection.server_config.get("tool_timeout", 60)
+
             try:
-                # Use persistent session
-                result = await connection.session.call_tool(tool_name, arguments)
+                # Wrap tool execution with configurable timeout
+                result = await asyncio.wait_for(
+                    connection.session.call_tool(tool_name, arguments),
+                    timeout=tool_timeout
+                )
 
                 # Parse result content
                 if hasattr(result, "content"):
@@ -1233,10 +1244,41 @@ The OAuth authorization code was received but token exchange failed.
                         "content": [{"type": "text", "text": str(result)}],
                     }
 
-            except Exception as e:
-                # Mark connection as unhealthy for potential recovery
+            except TimeoutError:
+                # Mark connection as unhealthy to trigger recovery on next call
                 connection._is_healthy = False
-                return {"success": False, "error": str(e)}
+
+                # Return structured timeout error
+                return {
+                    "success": False,
+                    "error": f"Tool '{tool_name}' execution timeout after {tool_timeout}s",
+                    "error_type": "timeout",
+                    "timeout_seconds": tool_timeout,
+                    "tool_name": tool_name
+                }
+
+            except Exception as e:
+                # Mark connection as unhealthy for any error
+                connection._is_healthy = False
+
+                # Return structured error with type discrimination
+                error_str = str(e)
+                error_type = "execution_error"
+
+                # Categorize common error types for better reporting
+                if "timeout" in error_str.lower():
+                    error_type = "timeout"
+                elif "connection" in error_str.lower():
+                    error_type = "connection_error"
+                elif "permission" in error_str.lower() or "unauthorized" in error_str.lower():
+                    error_type = "permission_error"
+
+                return {
+                    "success": False,
+                    "error": error_str,
+                    "error_type": error_type,
+                    "tool_name": tool_name
+                }
 
     async def read_resource(self, server_id: str, resource_uri: str) -> dict[str, Any]:
         """

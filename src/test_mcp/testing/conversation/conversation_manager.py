@@ -216,8 +216,25 @@ class ConversationManager:
                         break
 
                 except Exception as e:
-                    # Agent error
-                    error_message = f"Agent error: {e!s}"
+                    # Agent error with enhanced timeout context
+                    error_str = str(e)
+
+                    # Provide helpful context for timeout errors
+                    if "execution timeout" in error_str.lower():
+                        error_message = (
+                            f"Tool execution timeout: {error_str}. "
+                            f"This MCP server tool took too long to respond. "
+                            f"You can increase 'tool_timeout' in the server configuration."
+                        )
+                    elif "connection timeout" in error_str.lower():
+                        error_message = (
+                            f"Connection timeout: {error_str}. "
+                            f"Could not establish connection to MCP server. "
+                            f"Check if server is running and consider increasing 'connection_timeout'."
+                        )
+                    else:
+                        error_message = f"Agent error: {error_str}"
+
                     self._add_conversation_turn(
                         conversation,
                         "agent",

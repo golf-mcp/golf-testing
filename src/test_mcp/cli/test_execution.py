@@ -2082,7 +2082,7 @@ async def execute_conversation_test_real(
         )
         return {
             "success": False,
-            "error": f"Connection timeout: Could not connect to server '{server_model.url}' within timeout period. Please check if the server is running.",
+            "error": f"Connection timeout: Could not connect to server '{server_model.url}' within timeout period. Please check if the server is running and consider increasing 'connection_timeout' in server config.",
             "response_time": 0.0,
         }
     except asyncio.CancelledError:
@@ -2097,6 +2097,17 @@ async def execute_conversation_test_real(
     except Exception as e:
         progress_tracker.update_simple_progress(test_id, "Test failed", completed=True)
         error_msg = str(e)
+
+        # Check for tool timeout in error message
+        if "execution timeout" in error_msg.lower():
+            progress_tracker.update_simple_progress(
+                test_id, "Tool timeout", completed=True
+            )
+            return {
+                "success": False,
+                "error": f"Tool execution timeout: {error_msg}. Consider increasing 'tool_timeout' in server config for slow operations.",
+                "response_time": 0.0,
+            }
 
         # Provide user-friendly error messages for common issues
         if "Failed to connect" in error_msg or "Connection refused" in error_msg:
