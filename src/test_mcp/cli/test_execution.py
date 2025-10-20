@@ -49,17 +49,17 @@ from .utils import (
 
 def should_enable_judge_evaluation(suite_type: str, parallelism: int) -> bool:
     """Determine if judge evaluation should run based on suite type
-    
+
     Args:
         suite_type: Type of test suite (conversational, security, compliance)
         parallelism: Parallelism setting for the suite
-        
+
     Returns:
         bool: True if judge evaluation should be enabled
-        
+
     Rules:
         - Conversational tests: Always get judge evaluation (regardless of parallelism)
-        - Security tests: Never get judge evaluation 
+        - Security tests: Never get judge evaluation
         - Compliance tests: Never get judge evaluation
         - Other types: Default behavior (parallelism > 1)
     """
@@ -69,6 +69,83 @@ def should_enable_judge_evaluation(suite_type: str, parallelism: int) -> bool:
         return False  # Never judge security/compliance tests
     else:
         return parallelism > 1  # Default behavior for other types
+
+
+async def evaluate_results_with_judge(
+    results: list[dict],
+    suite_type: str,
+    parallelism: int,
+    console,
+    verbose: bool = False
+) -> list[dict]:
+    """Unified judge evaluation for both parallel and sequential paths
+
+    Args:
+        results: List of test results (normalized format)
+        suite_type: Type of test suite
+        parallelism: Parallelism setting
+        console: Console for output
+        verbose: Verbose output flag
+
+    Returns:
+        Results with evaluation fields added (modifies in place)
+    """
+    judge_enabled = should_enable_judge_evaluation(suite_type, parallelism)
+
+    if not judge_enabled:
+        return results
+
+    console.print("\n[bold]Running Evaluation...[/bold]")
+
+    try:
+        judge = ConversationJudge()
+        for result in results:
+            # Extract conversation result (handles both formats)
+            conversation_result = (
+                result.get("result_obj")  # Parallel format
+                or result.get("details", {}).get("conversation_result")  # Sequential format
+            )
+
+            if result.get("status") == "completed" and conversation_result:
+                try:
+                    eval_result = judge.evaluate_conversation(conversation_result)
+                    result["evaluation"] = eval_result.model_dump()
+
+                    if verbose:
+                        console.print(
+                            f"  {'✅' if eval_result.success else '❌'} {result.get('test_id')}: "
+                            f"{'PASSED' if eval_result.success else 'FAILED'}"
+                        )
+                except Exception as e:
+                    console.print(
+                        f"  [yellow]⚠️  {result.get('test_id')}: Judge evaluation failed - {e!s}[/yellow]"
+                    )
+                    # Add failure evaluation for consistency
+                    result["evaluation"] = {
+                        "overall_score": 0.0,
+                        "criteria_scores": {},
+                        "reasoning": f"Judge evaluation failed: {str(e)}",
+                        "success": False
+                    }
+    except Exception as e:
+        console.print(f"[yellow]Judge evaluation initialization failed: {e!s}[/yellow]")
+
+    return results
+
+
+def count_successful_tests(results: list[dict], suite_type: str, parallelism: int) -> int:
+    """Count successful tests using unified logic
+
+    Uses judge evaluation if enabled, otherwise uses execution success.
+    """
+    judge_enabled = should_enable_judge_evaluation(suite_type, parallelism)
+
+    if judge_enabled:
+        # Use judge evaluation for success
+        return len([r for r in results if r.get("evaluation", {}).get("success", False)])
+    else:
+        # Use execution success
+        return len([r for r in results if r.get("success", False)])
 
 
 def normalize_parallel_result(parallel_result: dict) -> dict:
@@ -119,12 +196,15 @@ def normalize_parallel_result(parallel_result: dict) -> dict:
     else:
         result_obj_status = ""
 
+    # Extract actual success from conversation result
+    # Check both execution success and status
+    execution_success = result.get("success", False)
+    status_achieved = result_obj_status in ["goal_achieved", "GOAL_ACHIEVED"]
+
     success = (
         status == "completed"
-        and result.get("success", False)
         and result_obj
-        # Removed result_obj_status == "goal_achieved" requirement
-        # Judge evaluation will determine final success
+        and (execution_success or status_achieved)  # Either indicator
     )
 
     # Extract timing
@@ -482,43 +562,20 @@ async def execute_test_cases(
                     }
                 )
 
-        # Run judge evaluation on parallel results
-        evaluations = []
-        console.print("\n[bold]Running Evaluation...[/bold]")
-        try:
-            judge = ConversationJudge()
-            for result in results:
-                # Extract conversation result from normalized parallel format
-                conversation_result = result.get("result_obj")
-
-                if result.get("status") == "completed" and conversation_result:
-                    try:
-                        eval_result = judge.evaluate_conversation(
-                            conversation=conversation_result
-                        )
-                        evaluations.append(eval_result.model_dump())
-
-                        # Update result with evaluation
-                        result["evaluation"] = eval_result.model_dump()
-
-                        if verbose:
-                            console.print(
-                                f"  {'✅' if eval_result.success else '❌'} {result.get('test_id')}: "
-                                f"{'PASSED' if eval_result.success else 'FAILED'}"
-                            )
-                    except Exception as e:
-                        console.print(
-                            f"  [yellow]⚠️  {result.get('test_id')}: Judge evaluation failed - {e!s}[/yellow]"
-                        )
-        except Exception as e:
-            console.print(
-                f"[yellow]Judge evaluation initialization failed: {e!s}[/yellow]"
-            )
-
-        # Update successful_tests count based on judge evaluation
-        successful_tests = len(
-            [r for r in results if r.get("evaluation", {}).get("success", False)]
+        # Use unified judge evaluation
+        results = await evaluate_results_with_judge(
+            results=results,
+            suite_type=test_type,
+            parallelism=parallelism,
+            console=console,
+            verbose=verbose
         )
+
+        # Extract evaluations for result file
+        evaluations = [r.get("evaluation") for r in results if "evaluation" in r]
+
+        # Update successful_tests count using unified logic
+        successful_tests = count_successful_tests(results, test_type, parallelism)
 
         # Skip to summary section (avoid sequential execution)
         execution_time = time.time() - start_time
@@ -766,45 +823,6 @@ async def execute_test_cases(
                                         f"    [dim]Summary: {security_report.critical_vulnerabilities} critical, {security_report.high_vulnerabilities} high, {security_report.medium_vulnerabilities} medium, {security_report.low_vulnerabilities} low[/dim]"
                                     )
 
-                # Add judge evaluation for conversational tests (sequential execution)
-                judge_enabled = should_enable_judge_evaluation(test_type, parallelism)
-                
-                if judge_enabled and "details" in result and "conversation_result" in result["details"]:
-                    try:
-                        conversation_result = result["details"]["conversation_result"]
-                        if conversation_result:
-                            # Initialize judge if not already done
-                            if 'judge' not in locals():
-                                judge = ConversationJudge()
-                            
-                            # Run judge evaluation
-                            judge_evaluation = judge.evaluate_conversation(conversation_result)
-                            
-                            # Add evaluation to result
-                            result["evaluation"] = {
-                                "overall_score": judge_evaluation.overall_score,
-                                "criteria_scores": judge_evaluation.criteria_scores,
-                                "reasoning": judge_evaluation.reasoning,
-                                "success": judge_evaluation.success
-                            }
-                            
-                            if verbose:
-                                console.print(f"  🏛️ [blue]Judge Score:[/blue] {judge_evaluation.overall_score:.1f}/10")
-                                if judge_evaluation.success:
-                                    console.print(f"  ✅ [green]Judge Decision: PASSED[/green]")
-                                else:
-                                    console.print(f"  ❌ [red]Judge Decision: FAILED[/red]")
-                    except Exception as judge_error:
-                        if verbose:
-                            console.print(f"  ⚠️ [yellow]Judge evaluation failed: {str(judge_error)}[/yellow]")
-                        # Add empty evaluation to maintain consistency
-                        result["evaluation"] = {
-                            "overall_score": 0.0,
-                            "criteria_scores": {},
-                            "reasoning": f"Judge evaluation failed: {str(judge_error)}",
-                            "success": False
-                        }
-
                 results.append(result)
 
             except Exception as e:
@@ -878,14 +896,19 @@ async def execute_test_cases(
 
     # Show final summary after live display ends
     execution_time = time.time() - start_time
-    
-    # Recalculate success count using judge evaluation when available (for consistent reporting)
-    judge_enabled = should_enable_judge_evaluation(test_type, parallelism)
-    if judge_enabled:
-        # For tests with judge evaluation, use judge success for counting
-        successful_tests = len([r for r in results if r.get("evaluation", {}).get("success", False)])
-    # Otherwise keep the original execution-based count
-    
+
+    # Run unified judge evaluation (will only run if enabled for suite type)
+    results = await evaluate_results_with_judge(
+        results=results,
+        suite_type=test_type,
+        parallelism=parallelism,
+        console=console,
+        verbose=verbose
+    )
+
+    # Calculate success count using unified logic
+    successful_tests = count_successful_tests(results, test_type, parallelism)
+
     pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
 
     console.print("\n[bold]Test Execution Summary:[/bold]")
@@ -1539,11 +1562,22 @@ async def run_conversation_with_provider(
             turn_number += 1
             current_time += time_per_message
 
-        # Don't override goal achievement based on tool usage alone
-        # Let the conversation manager and UserSimulator determine completion properly
-        # The judge will evaluate the actual goal achievement later
-        goal_achieved = None  # Always let judge determine this
-        conv_status = ConversationStatus.ACTIVE  # Default to active, judge will determine final status
+        # Infer preliminary status from conversation completion
+        # Check if tools were successfully used and response is meaningful
+        tools_were_used = len(tools_used) > 0
+        response_is_meaningful = len(response.strip()) > 50  # Basic heuristic
+
+        if tools_were_used and response_is_meaningful:
+            conv_status = ConversationStatus.GOAL_ACHIEVED
+            goal_achieved = True
+        elif tools_were_used:
+            conv_status = ConversationStatus.IN_PROGRESS
+            goal_achieved = False
+        else:
+            conv_status = ConversationStatus.ACTIVE
+            goal_achieved = False
+
+        # Note: Judge evaluation will make final determination
 
         conversation_result = ConversationResult(
             test_case=test_case,
@@ -1551,7 +1585,7 @@ async def run_conversation_with_provider(
             turns=turns,
             status=conv_status,
             completion_reason="Conversation completed - goal achievement to be determined by judge",
-            goal_achieved=False,  # Will be updated by judge evaluation
+            goal_achieved=goal_achieved,  # Preliminary determination, judge will finalize
             start_time=datetime.fromtimestamp(start_time),
             end_time=datetime.fromtimestamp(end_time),
             total_duration_seconds=duration,
@@ -1572,13 +1606,14 @@ async def run_conversation_with_provider(
                 "metadata": test_case_def.metadata or {},
             },
             "result": {
-                "status": {"value": "completed"},  # Judge will determine if goal achieved
+                "status": {"value": conv_status.value if hasattr(conv_status, 'value') else "completed"},
                 "turns": [
                     {"role": msg.get("role"), "content": msg.get("content")}
                     for msg in raw_messages
                 ],
                 "duration": duration,
-                "success": False,  # Judge will determine actual success
+                "success": goal_achieved,  # Preliminary success, judge will finalize
+                "judge_pending": True,  # Indicate judge will evaluate
             },
             "result_obj": conversation_result,  # Now a proper ConversationResult object with tools
             "status": "completed",

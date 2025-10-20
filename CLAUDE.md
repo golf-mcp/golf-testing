@@ -155,3 +155,42 @@ OPENAI_API_KEY=sk-...
 - Test files follow pattern: `test_*.py` or `*_test.py`
 - Test results saved to `test_results/` directory
 - LLM judge provides automated evaluation with reasoning
+
+## Parallel Execution
+
+The framework supports parallel test execution via the `parallelism` parameter:
+
+```bash
+# Run 5 tests concurrently
+mcp-t run suite-id server-id --parallelism 5
+```
+
+**Key Features:**
+- Isolated sessions per test (no shared state)
+- Thread-safe OAuth token management
+- Consistent judge evaluation across parallel/sequential modes
+- Proper async synchronization (no deadlocks)
+
+**Configuration:**
+```json
+{
+  "parallelism": 5  // Default in ConversationTestSuite
+}
+```
+
+**Best Practices:**
+- Use parallelism for fast feedback on large test suites
+- Sequential execution (parallelism=1) for debugging
+- OAuth-enabled tests work correctly in parallel
+- Judge evaluation works identically in both modes
+
+**Troubleshooting:**
+- If tests hang: Check for mixing sync/async code
+- If OAuth fails: Verify callback server ports are available
+- If results inconsistent: File a bug (should be deterministic)
+
+**Implementation Details:**
+- Session isolation: Each parallel test gets dedicated MCP connections
+- OAuth callback isolation: Flow-specific callback servers prevent race conditions
+- Metrics tracking: Async-safe counters prevent lost updates
+- Judge evaluation: Unified evaluation logic for consistent results

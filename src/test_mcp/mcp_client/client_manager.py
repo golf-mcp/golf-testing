@@ -1,9 +1,13 @@
 import asyncio
+import json
 import os
 import signal
 import socket
+import sys
 import threading
+import traceback
 import uuid
+import webbrowser
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,6 +16,8 @@ from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
+from rich.console import Console
+from rich.panel import Panel
 
 try:
     from mcp import ClientSession
@@ -59,22 +65,33 @@ class SharedTokenStorage(TokenStorage):
     """Shared token storage that persists across multiple MCP client instances."""
 
     _instances: dict[str, "SharedTokenStorage"] = {}
-    _lock = threading.Lock()  # Class-level lock for thread safety
+    _lock = asyncio.Lock()  # Class-level lock for async safety
 
     def __init__(self, server_url: str):
         self.server_url = server_url
         self.tokens: OAuthToken | None = None
         self.client_info: OAuthClientInformationFull | None = None
-        self._instance_lock = threading.Lock()
-        self._cleanup_event = threading.Event()
+        self._instance_lock = asyncio.Lock()  # Use asyncio.Lock for async methods
+        self._cleanup_event = asyncio.Event()  # Use asyncio.Event
 
     @classmethod
-    def get_instance(cls, server_url: str) -> "SharedTokenStorage":
-        """Get or create a shared token storage instance for the given server URL."""
-        with cls._lock:
-            if server_url not in cls._instances:
-                cls._instances[server_url] = cls(server_url)
-            return cls._instances[server_url]
+    async def get_instance(cls, server_url: str, session_id: str = None) -> "SharedTokenStorage":
+        """Get or create token storage, optionally scoped to session
+
+        Args:
+            server_url: Server URL for token storage
+            session_id: Optional session ID to isolate parallel tests
+
+        Returns:
+            SharedTokenStorage instance
+        """
+        # Create per-session key to isolate parallel tests
+        storage_key = f"{server_url}_{session_id}" if session_id else server_url
+
+        async with cls._lock:
+            if storage_key not in cls._instances:
+                cls._instances[storage_key] = cls(storage_key)
+            return cls._instances[storage_key]
 
     @classmethod
     def clear_all(cls) -> None:
@@ -92,65 +109,61 @@ class SharedTokenStorage(TokenStorage):
 
     async def get_tokens(self) -> OAuthToken | None:
         """Get stored tokens."""
-        with self._instance_lock:
+        async with self._instance_lock:
             return self.tokens
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
         """Store tokens."""
-        with self._instance_lock:
+        async with self._instance_lock:
             self.tokens = tokens
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         """Get stored client information."""
-        with self._instance_lock:
+        async with self._instance_lock:
             return self.client_info
 
     async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
         """Store client information."""
-        with self._instance_lock:
+        async with self._instance_lock:
             self.client_info = client_info
 
     @classmethod
     async def clear_all_async(cls) -> None:
-        """Async version of clear_all for proper cleanup during OAuth flows."""
-        instances_to_clear = []
-        with cls._lock:
+        """Async cleanup with proper synchronization"""
+        async with cls._lock:
+            # Copy AND clear inside lock (atomic) - fixes TOCTOU race
             instances_to_clear = list(cls._instances.values())
             cls._instances.clear()
 
-        # Clear each instance's data outside the class lock to prevent deadlocks
-        for instance in instances_to_clear:
-            with instance._instance_lock:
-                instance.tokens = None
-                instance.client_info = None
-                instance._cleanup_event.set()
-
-        # Wait for all cleanup to complete
+        # Clear instances outside lock (no TOCTOU issue)
         await asyncio.gather(
-            *[
-                asyncio.get_event_loop().run_in_executor(
-                    None, lambda i=instance: i._cleanup_event.wait(timeout=1.0)
-                )
-                for instance in instances_to_clear
-            ]
+            *[instance._clear_data() for instance in instances_to_clear],
+            return_exceptions=True  # Don't fail if one fails
         )
+
+    async def _clear_data(self):
+        """Instance-level cleanup"""
+        async with self._instance_lock:
+            self.tokens = None
+            self.client_info = None
+            self._cleanup_event.set()
 
     async def get_valid_token(self) -> OAuthToken | None:
         """Get valid token with cleanup synchronization."""
-        with self._instance_lock:
+        async with self._instance_lock:
             if self._cleanup_event.is_set():
                 return None  # Instance was cleaned up
             return self.tokens
 
     async def save_token(self, token: OAuthToken) -> None:
         """Save token with cleanup synchronization."""
-        with self._instance_lock:
+        async with self._instance_lock:
             if not self._cleanup_event.is_set():
                 self.tokens = token
 
-    def has_valid_tokens(self) -> bool:
+    async def has_valid_tokens(self) -> bool:
         """Check if we have valid tokens stored."""
-        with self._instance_lock:
+        async with self._instance_lock:
             return self.tokens is not None
 
 
@@ -331,6 +344,8 @@ class MCPClientManager:
         self._stdio_processes: dict[str, Any] = {}  # Track stdio subprocesses
         self._current_oauth_url: str | None = None  # Store current OAuth URL
         self._master_lock = asyncio.Lock()  # Master lock for safe lock creation
+        self._active_callback_servers: dict[str, CallbackServer] = {}  # Flow ID → server
+        self._callback_lock = asyncio.Lock()  # Protect dict access
 
     def _parse_command(self, command_str: str) -> tuple[str, list[str]]:
         """
@@ -349,8 +364,6 @@ class MCPClientManager:
 
     async def _handle_oauth_redirect(self, auth_url: str) -> None:
         """Handle OAuth redirect with enhanced URL presentation."""
-        from rich.console import Console
-        from rich.panel import Panel
 
         console = Console()
 
@@ -382,8 +395,6 @@ Please visit this URL to authorize the MCP Testing Framework:
 
         # Try to open browser automatically
         try:
-            import webbrowser
-
             webbrowser.open(auth_url)
             console.print(
                 "[dim]🔗 Opening authorization URL in your default browser...[/dim]"
@@ -395,12 +406,29 @@ Please visit this URL to authorize the MCP Testing Framework:
 
         console.print()
 
-    async def _handle_oauth_callback(self) -> tuple[str, str | None]:
-        """Handle OAuth callback using pre-allocated callback server."""
-        callback_server = self._active_callback_server
-        from rich.console import Console
+    async def _handle_oauth_callback(self, flow_id: str | None = None) -> tuple[str, str | None]:
+        """Handle OAuth callback using flow-specific callback server.
 
+        Args:
+            flow_id: Optional flow ID to identify which callback server to use
+
+        Returns:
+            Tuple of (authorization_code, state)
+        """
         console = Console()
+
+        # Get flow-specific callback server
+        if flow_id:
+            async with self._callback_lock:
+                callback_server = self._active_callback_servers.get(flow_id)
+
+            if not callback_server:
+                raise RuntimeError(f"No callback server found for flow {flow_id}")
+        else:
+            # Fallback to instance attribute for backward compatibility
+            callback_server = getattr(self, '_active_callback_server', None)
+            if not callback_server:
+                raise RuntimeError("No callback server available")
 
         console.print(
             f"\n📍 Waiting for OAuth callback on: [cyan]{callback_server.get_callback_url()}[/cyan]"
@@ -530,8 +558,6 @@ Please visit this URL to authorize the MCP Testing Framework:
                 if hasattr(exception.response, "json"):
                     error_data = exception.response.json()
                 elif hasattr(exception.response, "text"):
-                    import json
-
                     error_data = json.loads(exception.response.text)
                 else:
                     error_data = {}
@@ -743,12 +769,16 @@ Please visit this URL to authorize the MCP Testing Framework:
             except Exception:
                 oauth_metadata = None
 
+            # Generate unique flow ID for this OAuth attempt
+            flow_id = str(uuid.uuid4())
+
             # Pre-allocate callback server to ensure consistent port
             callback_server = CallbackServer()
             callback_server.start()
 
-            # Store callback server immediately to ensure cleanup works
-            self._active_callback_server = callback_server
+            # Store with flow-specific key
+            async with self._callback_lock:
+                self._active_callback_servers[flow_id] = callback_server
 
             try:
                 # Use callback server's actual port in metadata
@@ -758,14 +788,14 @@ Please visit this URL to authorize the MCP Testing Framework:
                 )
 
                 # Create shared token storage and OAuth provider
-                token_storage = SharedTokenStorage.get_instance(url)
+                token_storage = await SharedTokenStorage.get_instance(url, session_id=None)
 
                 oauth_auth = OAuthClientProvider(
                     server_url=url,
                     client_metadata=client_metadata,
                     storage=token_storage,
                     redirect_handler=self._handle_oauth_redirect,
-                    callback_handler=self._handle_oauth_callback,
+                    callback_handler=lambda: self._handle_oauth_callback(flow_id),
                 )
 
                 # Use OAuth authentication
@@ -784,16 +814,13 @@ Please visit this URL to authorize the MCP Testing Framework:
                             await asyncio.wait_for(session.initialize(), timeout=30.0)
                             yield session
                     finally:
-                        # Clean up callback server after session is done
-                        self._active_callback_server.stop()
-                        delattr(self, "_active_callback_server")
+                        # Clean up flow-specific callback server
+                        async with self._callback_lock:
+                            if flow_id in self._active_callback_servers:
+                                self._active_callback_servers[flow_id].stop()
+                                del self._active_callback_servers[flow_id]
                 return
             except Exception as e:
-                import traceback
-
-                from rich.console import Console
-                from rich.panel import Panel
-
                 console = Console()
 
                 # Extract specific OAuth error details
@@ -904,11 +931,12 @@ The OAuth authorization code was received but token exchange failed.
                 raise RuntimeError(
                     f"OAuth authentication failed: {oauth_error['error']} - {oauth_error['description']}"
                 ) from e
-            except Exception:
+            finally:
                 # Clean up callback server on authentication failure
-                self._active_callback_server.stop()
-                delattr(self, "_active_callback_server")
-                raise
+                async with self._callback_lock:
+                    if flow_id in self._active_callback_servers:
+                        self._active_callback_servers[flow_id].stop()
+                        del self._active_callback_servers[flow_id]
 
         # Prepare headers with authentication for basic HTTP
         headers = {}
@@ -1395,8 +1423,11 @@ The OAuth authorization code was received but token exchange failed.
                     await self._active_contexts[server_id].__aexit__(None, None, None)
                 except Exception as e:
                     print(
-                        f"Warning: Error closing connection context for {server_id}: {e}"
+                        f"Warning: Error closing connection context for {server_id}: {e}",
+                        file=sys.stderr,
                     )
+                    print("Full traceback:", file=sys.stderr)
+                    traceback.print_exc(file=sys.stderr)
                 del self._active_contexts[server_id]
 
             # Clean up connection lock
@@ -1412,7 +1443,12 @@ The OAuth authorization code was received but token exchange failed.
             try:
                 await context_manager.__aexit__(None, None, None)
             except Exception as e:
-                print(f"Warning: Error closing connection context for {server_id}: {e}")
+                print(
+                    f"Warning: Error closing connection context for {server_id}: {e}",
+                    file=sys.stderr,
+                )
+                print("Full traceback:", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
 
         # Clear all registries
         self._active_contexts.clear()

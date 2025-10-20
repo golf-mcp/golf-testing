@@ -1,3 +1,4 @@
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -22,6 +23,27 @@ class ProviderMetrics:
     # total_tokens removed - unreliable estimation
     total_latency_ms: float = 0
     error_count: int = 0
+    _lock: asyncio.Lock = None
+
+    def __post_init__(self):
+        """Initialize lock after dataclass initialization"""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+
+    async def increment_requests(self):
+        """Thread-safe request counter increment"""
+        async with self._lock:
+            self.requests_made += 1
+
+    async def add_latency(self, latency_ms: float):
+        """Thread-safe latency accumulator"""
+        async with self._lock:
+            self.total_latency_ms += latency_ms
+
+    async def increment_errors(self):
+        """Thread-safe error counter increment"""
+        async with self._lock:
+            self.error_count += 1
 
     @property
     def average_latency_ms(self) -> float:
@@ -123,6 +145,7 @@ class AnthropicProvider(ProviderInterface):
         self.api_key = config["api_key"]
         self.model = config.get("model", "claude-sonnet-4-20250514")
         self.sessions: dict[str, Any] = {}
+        self._sessions_lock = asyncio.Lock()  # Protect dict access
 
     async def send_message(
         self,
@@ -132,7 +155,7 @@ class AnthropicProvider(ProviderInterface):
     ) -> str:
         """Send message using Anthropic API with session-specific MCP connections"""
         start_time = time.perf_counter()
-        self.metrics.requests_made += 1
+        await self.metrics.increment_requests()
 
         try:
             # Use session-specific MCP client if session_id is provided
@@ -146,13 +169,13 @@ class AnthropicProvider(ProviderInterface):
 
             # Update metrics
             latency = (time.perf_counter() - start_time) * 1000
-            self.metrics.total_latency_ms += latency
+            await self.metrics.add_latency(latency)
             # Token tracking removed - rely on provider's actual usage metrics
 
             return response
 
         except Exception:
-            self.metrics.error_count += 1
+            await self.metrics.increment_errors()
             raise
 
     async def send_message_with_tools(
@@ -169,7 +192,7 @@ class AnthropicProvider(ProviderInterface):
     ) -> dict[str, Any]:
         """Send direct MCP protocol request for compliance testing"""
         start_time = time.perf_counter()
-        self.metrics.requests_made += 1
+        await self.metrics.increment_requests()
 
         try:
             # Build JSON-RPC 2.0 request
@@ -200,14 +223,14 @@ class AnthropicProvider(ProviderInterface):
 
                     # Update metrics
                     latency = (time.perf_counter() - start_time) * 1000
-                    self.metrics.total_latency_ms += latency
+                    await self.metrics.add_latency(latency)
 
                     return response_data
                 else:
                     raise Exception(f"MCP HTTP {response.status_code}: {response.text}")
 
         except Exception:
-            self.metrics.error_count += 1
+            await self.metrics.increment_errors()
             raise
 
     async def start_session(self, session_id: str) -> bool:
@@ -234,31 +257,36 @@ class AnthropicProvider(ProviderInterface):
                             pass
                     raise RuntimeError(f"Failed to connect to server: {e}") from e
 
-        self.sessions[session_id] = {
-            "created_at": time.time(),
-            "message_count": 0,
-            "mcp_client": mcp_client,
-            "server_ids": server_ids,
-        }
+        async with self._sessions_lock:  # Lock dict write
+            self.sessions[session_id] = {
+                "created_at": time.time(),
+                "message_count": 0,
+                "mcp_client": mcp_client,
+                "server_ids": server_ids,
+            }
         return True
 
     async def end_session(self, session_id: str) -> None:
         """Clean up session and disconnect MCP servers"""
-        if session_id in self.sessions:
+        async with self._sessions_lock:  # Lock dict read
+            if session_id not in self.sessions:
+                return
             session = self.sessions[session_id]
 
-            # Disconnect all MCP servers for this session
-            mcp_client = session.get("mcp_client")
-            server_ids = session.get("server_ids", [])
+        # Disconnect all MCP servers for this session (outside lock)
+        mcp_client = session.get("mcp_client")
+        server_ids = session.get("server_ids", [])
 
-            if mcp_client and server_ids:
-                for server_id in server_ids:
-                    try:
-                        await mcp_client.disconnect_server(server_id)
-                    except Exception:
-                        pass  # Ignore cleanup errors
+        if mcp_client and server_ids:
+            for server_id in server_ids:
+                try:
+                    await mcp_client.disconnect_server(server_id)
+                except Exception:
+                    pass  # Ignore cleanup errors
 
-            del self.sessions[session_id]
+        async with self._sessions_lock:  # Lock dict delete
+            if session_id in self.sessions:
+                del self.sessions[session_id]
 
     async def send_message_with_metadata(
         self,
