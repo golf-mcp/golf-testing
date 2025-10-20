@@ -76,7 +76,7 @@ async def evaluate_results_with_judge(
     suite_type: str,
     parallelism: int,
     console,
-    verbose: bool = False
+    verbose: bool = False,
 ) -> list[dict]:
     """Unified judge evaluation for both parallel and sequential paths
 
@@ -95,8 +95,6 @@ async def evaluate_results_with_judge(
     if not judge_enabled:
         return results
 
-    console.print("\n[bold]Running Evaluation...[/bold]")
-
     try:
         judge = ConversationJudge()
 
@@ -108,23 +106,68 @@ async def evaluate_results_with_judge(
             # Extract conversation result (handles both formats)
             conversation_result = (
                 result.get("result_obj")  # Parallel format
-                or result.get("details", {}).get("conversation_result")  # Sequential format
+                or result.get("details", {}).get(
+                    "conversation_result"
+                )  # Sequential format
             )
 
             if result.get("status") == "completed" and conversation_result:
                 conversations.append(conversation_result)
                 result_indices.append(i)
 
-        # Perform batch evaluation (now parallelized!)
+        # Perform batch evaluation with progress tracking
         if conversations:
-            evaluations = await judge.evaluate_conversations_batch_async(
-                conversations,
-                parallel=True,  # Enable parallel evaluation
-                max_concurrency=parallelism  # Use suite's parallelism setting
+            # Create progress tracker for evaluations
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                SpinnerColumn,
+                TextColumn,
+                TimeElapsedColumn,
             )
 
+            eval_progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                console=console.console,
+            )
+
+            eval_task = eval_progress.add_task(
+                f"Running {len(conversations)} evaluations (max {parallelism} parallel)",
+                total=len(conversations),
+            )
+
+            from rich.live import Live
+
+            # Track completed evaluations
+            completed_evals = 0
+            evaluations = []
+
+            # Run evaluation with progress updates
+            with Live(eval_progress, console=console.console, refresh_per_second=2):
+                import asyncio
+
+                semaphore = asyncio.Semaphore(parallelism)
+
+                async def evaluate_one(conv, idx):
+                    nonlocal completed_evals
+                    async with semaphore:
+                        loop = asyncio.get_event_loop()
+                        evaluation = await loop.run_in_executor(
+                            None, judge.evaluate_conversation, conv
+                        )
+                        completed_evals += 1
+                        eval_progress.update(eval_task, completed=completed_evals)
+                        return evaluation
+
+                tasks = [evaluate_one(conv, i) for i, conv in enumerate(conversations)]
+                evaluations = await asyncio.gather(*tasks)
+
             # Map evaluations back to results
-            for idx, eval_result in zip(result_indices, evaluations):
+            for idx, eval_result in zip(result_indices, evaluations, strict=True):
                 results[idx]["evaluation"] = eval_result.model_dump()
 
                 if verbose:
@@ -140,7 +183,9 @@ async def evaluate_results_with_judge(
     return results
 
 
-def count_successful_tests(results: list[dict], suite_type: str, parallelism: int) -> int:
+def count_successful_tests(
+    results: list[dict], suite_type: str, parallelism: int
+) -> int:
     """Count successful tests using unified logic
 
     Uses judge evaluation if enabled, otherwise uses execution success.
@@ -149,7 +194,9 @@ def count_successful_tests(results: list[dict], suite_type: str, parallelism: in
 
     if judge_enabled:
         # Use judge evaluation for success
-        return len([r for r in results if r.get("evaluation", {}).get("success", False)])
+        return len(
+            [r for r in results if r.get("evaluation", {}).get("success", False)]
+        )
     else:
         # Use execution success
         return len([r for r in results if r.get("success", False)])
@@ -250,9 +297,6 @@ def _print_output_files(run_file, eval_file=None) -> None:
     md_file = run_file.with_suffix(".md")
     if md_file.exists():
         console.print(f"  MD: {md_file}")
-
-    if eval_file:
-        console.print(f"  Evaluations: {eval_file}")
 
 
 class TestRunConfiguration(BaseModel):
@@ -458,7 +502,6 @@ async def run_test_suite(
     auth_required = suite.auth_required  # Direct field access
 
     console = get_console()
-    console.print(f"Running {len(test_cases)} tests from suite: {suite.name}")
     console.print(f"Authentication required: {auth_required}")
 
     if verbose:
@@ -575,7 +618,7 @@ async def execute_test_cases(
             suite_type=test_type,
             parallelism=parallelism,
             console=console,
-            verbose=verbose
+            verbose=verbose,
         )
 
         # Extract evaluations for result file
@@ -588,27 +631,38 @@ async def execute_test_cases(
         execution_time = time.time() - start_time
         pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
 
-        console.print("\n[bold]Test Execution Summary:[/bold]")
-        console.print(f"Suite: {suite_config.name}")
-        console.print(f"Server: {server_config.name}")
-        console.print(f"Total Tests: {len(test_cases)}")
-        console.print(f"Passed: {successful_tests} ({pass_rate:.1f}%)")
-        console.print(f"Failed: {len(test_cases) - successful_tests}")
-        console.print(f"Duration: {execution_time:.2f}s")
+        # Display Results section with all tests
+        console.print("\n[bold]Results:[/bold]")
 
-        # Show failed tests with details
+        # Show successful tests with test names
+        successful_results = [
+            r for r in results if r.get("evaluation", {}).get("success", True)
+        ]
+        for result in successful_results:
+            test_id = result.get("test_id", "unknown")
+            console.print(f"  ✅ {test_id}")
+
+        # Show failed tests with full reasoning (not truncated)
         failed_tests = [
             r for r in results if not r.get("evaluation", {}).get("success", True)
         ]
-        if failed_tests:
-            console.print("\n[bold red]Failed Tests:[/bold red]")
-            for result in failed_tests:
-                test_id = result.get("test_id", "unknown")
-                eval_data = result.get("evaluation", {})
-                reasoning = eval_data.get(
-                    "reasoning", result.get("message", "Unknown error")
-                )
-                console.print(f"  ❌ {test_id}: {reasoning[:100]}...")
+        for result in failed_tests:
+            test_id = result.get("test_id", "unknown")
+            eval_data = result.get("evaluation", {})
+            reasoning = eval_data.get(
+                "reasoning", result.get("message", "Unknown error")
+            )
+            # Print full reasoning without truncation
+            console.print(f"  ❌ {test_id}: {reasoning}")
+
+        # Display Summary section
+        console.print("\n[bold]Summary:[/bold]")
+        console.print(f"  Suite: {suite_config.name}")
+        console.print(f"  Server: {server_config.name}")
+        console.print(f"  Total Tests: {len(test_cases)}")
+        console.print(f"  Passed: {successful_tests} ({pass_rate:.1f}%)")
+        console.print(f"  Failed: {len(test_cases) - successful_tests}")
+        console.print(f"  Duration: {execution_time:.2f}s")
 
         # Generate unique run ID and save results (same as sequential path)
         run_id = str(uuid.uuid4())
@@ -910,7 +964,7 @@ async def execute_test_cases(
         suite_type=test_type,
         parallelism=parallelism,
         console=console,
-        verbose=verbose
+        verbose=verbose,
     )
 
     # Calculate success count using unified logic
@@ -918,22 +972,46 @@ async def execute_test_cases(
 
     pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
 
-    console.print("\n[bold]Test Execution Summary:[/bold]")
-    console.print(f"Suite: {suite_config.name}")
-    console.print(f"Server: {server_config.name}")
-    console.print(f"Total Tests: {len(test_cases)}")
-    console.print(f"Passed: {successful_tests} ({pass_rate:.1f}%)")
-    console.print(f"Failed: {len(test_cases) - successful_tests}")
-    console.print(f"Duration: {execution_time:.2f}s")
+    # Display Results section with all tests
+    console.print("\n[bold]Results:[/bold]")
 
-    # Show failed tests with details (only once)
-    failed_tests = [r for r in results if not r.get("success", True)]
-    if failed_tests:
-        console.print("\n[bold red]Failed Tests:[/bold red]")
-        for result in failed_tests:
-            test_id = result.get("test_id", "unknown")
-            error_msg = result.get("error", result.get("message", "Unknown error"))
-            console.print(f"  ❌ {test_id}: {error_msg}")
+    # Show successful tests with test names
+    successful_results = [
+        r
+        for r in results
+        if r.get("evaluation", {}).get("success", True)
+        or (not r.get("evaluation") and r.get("success", True))
+    ]
+    for result in successful_results:
+        test_id = result.get("test_id", "unknown")
+        console.print(f"  ✅ {test_id}")
+
+    # Show failed tests with full reasoning (not truncated)
+    failed_tests = [
+        r
+        for r in results
+        if not (
+            r.get("evaluation", {}).get("success", True)
+            or (not r.get("evaluation") and r.get("success", True))
+        )
+    ]
+    for result in failed_tests:
+        test_id = result.get("test_id", "unknown")
+        eval_data = result.get("evaluation", {})
+        reasoning = eval_data.get(
+            "reasoning", result.get("error", result.get("message", "Unknown error"))
+        )
+        # Print full reasoning without truncation
+        console.print(f"  ❌ {test_id}: {reasoning}")
+
+    # Display Summary section
+    console.print("\n[bold]Summary:[/bold]")
+    console.print(f"  Suite: {suite_config.name}")
+    console.print(f"  Server: {server_config.name}")
+    console.print(f"  Total Tests: {len(test_cases)}")
+    console.print(f"  Passed: {successful_tests} ({pass_rate:.1f}%)")
+    console.print(f"  Failed: {len(test_cases) - successful_tests}")
+    console.print(f"  Duration: {execution_time:.2f}s")
 
     # ========== NEW RESULT SAVING LOGIC ==========
     # Generate unique run ID
@@ -1356,7 +1434,10 @@ def get_multi_provider_config_from_env(
         elif provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             if api_key:
-                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-5-2025-08-07"}
+                provider_configs["openai"] = {
+                    "api_key": api_key,
+                    "model": "gpt-5-2025-08-07",
+                }
         elif provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if api_key:
@@ -1613,7 +1694,11 @@ async def run_conversation_with_provider(
                 "metadata": test_case_def.metadata or {},
             },
             "result": {
-                "status": {"value": conv_status.value if hasattr(conv_status, 'value') else "completed"},
+                "status": {
+                    "value": conv_status.value
+                    if hasattr(conv_status, "value")
+                    else "completed"
+                },
                 "turns": [
                     {"role": msg.get("role"), "content": msg.get("content")}
                     for msg in raw_messages
