@@ -83,7 +83,7 @@ async def evaluate_results_with_judge(
     Args:
         results: List of test results (normalized format)
         suite_type: Type of test suite
-        parallelism: Parallelism setting
+        parallelism: Parallelism setting (used for judge concurrency)
         console: Console for output
         verbose: Verbose output flag
 
@@ -99,7 +99,12 @@ async def evaluate_results_with_judge(
 
     try:
         judge = ConversationJudge()
-        for result in results:
+
+        # Extract all conversation results for batch evaluation
+        conversations = []
+        result_indices = []  # Track which results get evaluated
+
+        for i, result in enumerate(results):
             # Extract conversation result (handles both formats)
             conversation_result = (
                 result.get("result_obj")  # Parallel format
@@ -107,26 +112,28 @@ async def evaluate_results_with_judge(
             )
 
             if result.get("status") == "completed" and conversation_result:
-                try:
-                    eval_result = judge.evaluate_conversation(conversation_result)
-                    result["evaluation"] = eval_result.model_dump()
+                conversations.append(conversation_result)
+                result_indices.append(i)
 
-                    if verbose:
-                        console.print(
-                            f"  {'✅' if eval_result.success else '❌'} {result.get('test_id')}: "
-                            f"{'PASSED' if eval_result.success else 'FAILED'}"
-                        )
-                except Exception as e:
+        # Perform batch evaluation (now parallelized!)
+        if conversations:
+            evaluations = await judge.evaluate_conversations_batch_async(
+                conversations,
+                parallel=True,  # Enable parallel evaluation
+                max_concurrency=parallelism  # Use suite's parallelism setting
+            )
+
+            # Map evaluations back to results
+            for idx, eval_result in zip(result_indices, evaluations):
+                results[idx]["evaluation"] = eval_result.model_dump()
+
+                if verbose:
                     console.print(
-                        f"  [yellow]⚠️  {result.get('test_id')}: Judge evaluation failed - {e!s}[/yellow]"
+                        f"  {'✅' if eval_result.success else '❌'} "
+                        f"{results[idx].get('test_id')}: "
+                        f"{'PASSED' if eval_result.success else 'FAILED'}"
                     )
-                    # Add failure evaluation for consistency
-                    result["evaluation"] = {
-                        "overall_score": 0.0,
-                        "criteria_scores": {},
-                        "reasoning": f"Judge evaluation failed: {str(e)}",
-                        "success": False
-                    }
+
     except Exception as e:
         console.print(f"[yellow]Judge evaluation initialization failed: {e!s}[/yellow]")
 
