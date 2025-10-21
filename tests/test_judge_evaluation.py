@@ -1,4 +1,5 @@
 """Tests for judge evaluation consistency between parallel/sequential"""
+
 import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
@@ -57,9 +58,7 @@ def test_count_successful_without_judge():
 @pytest.mark.asyncio
 async def test_evaluate_results_skips_when_disabled():
     """Test evaluate_results_with_judge skips for security/compliance"""
-    results = [
-        {"test_id": "test1", "status": "completed", "result_obj": Mock()}
-    ]
+    results = [{"test_id": "test1", "status": "completed", "result_obj": Mock()}]
     mock_console = Mock()
 
     # Should skip for security
@@ -68,7 +67,7 @@ async def test_evaluate_results_skips_when_disabled():
         suite_type="security",
         parallelism=5,
         console=mock_console,
-        verbose=False
+        verbose=False,
     )
 
     # No evaluation should be added
@@ -80,18 +79,20 @@ async def test_evaluate_results_runs_for_conversational():
     """Test evaluate_results_with_judge runs for conversational"""
     # Mock conversation result
     mock_conversation_result = Mock()
-    mock_conversation_result.model_dump = Mock(return_value={
-        "overall_score": 8.0,
-        "criteria_scores": {},
-        "reasoning": "Test passed",
-        "success": True
-    })
+    mock_conversation_result.model_dump = Mock(
+        return_value={
+            "overall_score": 8.0,
+            "criteria_scores": {},
+            "reasoning": "Test passed",
+            "success": True,
+        }
+    )
 
     results = [
         {
             "test_id": "test1",
             "status": "completed",
-            "result_obj": mock_conversation_result
+            "result_obj": mock_conversation_result,
         }
     ]
     mock_console = Mock()
@@ -102,12 +103,14 @@ async def test_evaluate_results_runs_for_conversational():
         mock_judge = Mock()
         mock_eval_result = Mock()
         mock_eval_result.success = True
-        mock_eval_result.model_dump = Mock(return_value={
-            "overall_score": 8.0,
-            "criteria_scores": {},
-            "reasoning": "Test passed",
-            "success": True
-        })
+        mock_eval_result.model_dump = Mock(
+            return_value={
+                "overall_score": 8.0,
+                "criteria_scores": {},
+                "reasoning": "Test passed",
+                "success": True,
+            }
+        )
         # Mock the evaluate_conversation method (called in thread pool executor)
         mock_judge.evaluate_conversation = Mock(return_value=mock_eval_result)
         MockJudge.return_value = mock_judge
@@ -118,7 +121,7 @@ async def test_evaluate_results_runs_for_conversational():
             suite_type="conversational",
             parallelism=1,
             console=mock_console,
-            verbose=False
+            verbose=False,
         )
 
         # Evaluation should be added
@@ -130,19 +133,13 @@ async def test_evaluate_results_runs_for_conversational():
 async def test_evaluate_results_handles_both_formats():
     """Test evaluate_results_with_judge handles parallel and sequential formats"""
     # Parallel format (result_obj)
-    parallel_result = {
-        "test_id": "test1",
-        "status": "completed",
-        "result_obj": Mock()
-    }
+    parallel_result = {"test_id": "test1", "status": "completed", "result_obj": Mock()}
 
     # Sequential format (details.conversation_result)
     sequential_result = {
         "test_id": "test2",
         "status": "completed",
-        "details": {
-            "conversation_result": Mock()
-        }
+        "details": {"conversation_result": Mock()},
     }
 
     results = [parallel_result, sequential_result]
@@ -153,12 +150,14 @@ async def test_evaluate_results_handles_both_formats():
         mock_judge = Mock()
         mock_eval_result = Mock()
         mock_eval_result.success = True
-        mock_eval_result.model_dump = Mock(return_value={
-            "overall_score": 8.0,
-            "criteria_scores": {},
-            "reasoning": "Test passed",
-            "success": True
-        })
+        mock_eval_result.model_dump = Mock(
+            return_value={
+                "overall_score": 8.0,
+                "criteria_scores": {},
+                "reasoning": "Test passed",
+                "success": True,
+            }
+        )
         # Mock the evaluate_conversation method (called in thread pool executor)
         mock_judge.evaluate_conversation = Mock(return_value=mock_eval_result)
         MockJudge.return_value = mock_judge
@@ -168,7 +167,7 @@ async def test_evaluate_results_handles_both_formats():
             suite_type="conversational",
             parallelism=1,
             console=mock_console,
-            verbose=False
+            verbose=False,
         )
 
         # Both should have evaluations
@@ -185,7 +184,7 @@ async def test_evaluate_results_handles_judge_failure():
         {
             "test_id": "test1",
             "status": "completed",
-            "result_obj": mock_conversation_result
+            "result_obj": mock_conversation_result,
         }
     ]
     mock_console = Mock()
@@ -194,7 +193,9 @@ async def test_evaluate_results_handles_judge_failure():
     with patch("src.test_mcp.cli.test_execution.ConversationJudge") as MockJudge:
         mock_judge = Mock()
         # Make judge raise exception
-        mock_judge.evaluate_conversations_batch_async = AsyncMock(side_effect=Exception("Judge failed"))
+        mock_judge.evaluate_conversations_batch_async = AsyncMock(
+            side_effect=Exception("Judge failed")
+        )
         MockJudge.return_value = mock_judge
 
         await evaluate_results_with_judge(
@@ -202,7 +203,7 @@ async def test_evaluate_results_handles_judge_failure():
             suite_type="conversational",
             parallelism=1,
             console=mock_console,
-            verbose=False
+            verbose=False,
         )
 
         # When batch evaluation fails, no evaluations are added (whole batch fails)

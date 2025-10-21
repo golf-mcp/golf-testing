@@ -393,7 +393,9 @@ class TestClientManagerThreadSafety:
         manager = MCPClientManager()
 
         # Mock streamablehttp_client to simulate timeout
-        with patch("src.test_mcp.mcp_client.client_manager.streamablehttp_client") as mock_client:
+        with patch(
+            "src.test_mcp.mcp_client.client_manager.streamablehttp_client"
+        ) as mock_client:
             # Simulate timeout on first 2 attempts, success on 3rd
             attempt_count = 0
 

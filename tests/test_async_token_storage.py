@@ -1,4 +1,5 @@
 """Tests for async token storage race conditions"""
+
 import asyncio
 import pytest
 from src.test_mcp.mcp_client.client_manager import SharedTokenStorage
@@ -47,8 +48,7 @@ async def test_no_deadlock_under_load():
 
     # Should complete without deadlock
     await asyncio.wait_for(
-        asyncio.gather(*[rapid_operations() for _ in range(100)]),
-        timeout=30.0
+        asyncio.gather(*[rapid_operations() for _ in range(100)]), timeout=30.0
     )
 
 

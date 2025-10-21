@@ -170,7 +170,7 @@ def _generate_evaluation_details(evaluation: dict) -> list[str]:
     """Generate LLM judge evaluation details"""
     if not evaluation:
         return []
-    
+
     lines = [
         "",
         "#### LLM Judge Evaluation",
@@ -179,37 +179,41 @@ def _generate_evaluation_details(evaluation: dict) -> list[str]:
         f"**Success**: {'✅ PASSED' if evaluation.get('success', False) else '❌ FAILED'}  ",
         "",
     ]
-    
+
     # Criteria scores breakdown
     criteria_scores = evaluation.get("criteria_scores", {})
     if criteria_scores:
-        lines.extend([
-            "**Criteria Scores**:",
-        ])
+        lines.extend(
+            [
+                "**Criteria Scores**:",
+            ]
+        )
         for criterion, score in criteria_scores.items():
             # Format criterion name (goal_achieved -> Goal Achieved)
-            formatted_name = criterion.replace('_', ' ').title()
+            formatted_name = criterion.replace("_", " ").title()
             lines.append(f"- {formatted_name}: {score:.1f}/1.0")
         lines.append("")
-    
+
     # Judge reasoning
     reasoning = evaluation.get("reasoning", "")
     if reasoning:
-        lines.extend([
-            "**Judge Reasoning**:",
-            "```",
-            reasoning,
-            "```",
-            "",
-        ])
-    
+        lines.extend(
+            [
+                "**Judge Reasoning**:",
+                "```",
+                reasoning,
+                "```",
+                "",
+            ]
+        )
+
     return lines
 
 
 def _extract_tool_results_from_raw_data(raw_data: list) -> dict:
     """Extract tool results from raw conversation data and map them to tool use IDs"""
     tool_results = {}
-    
+
     for entry in raw_data:
         if entry.get("role") == "user" and isinstance(entry.get("content"), list):
             for content_item in entry["content"]:
@@ -218,7 +222,7 @@ def _extract_tool_results_from_raw_data(raw_data: list) -> dict:
                     result_content = content_item.get("content")
                     if tool_use_id and result_content:
                         tool_results[tool_use_id] = result_content
-    
+
     return tool_results
 
 
@@ -279,33 +283,38 @@ def _generate_conversation_details(conv: dict) -> list[str]:
                     result = tool_call.get("result")
                     error = tool_call.get("error")
                     execution_time = tool_call.get("execution_time_ms")
-                    
+
                     lines.append(f"- 🔧 **{tool_name}**")
-                    
+
                     # Show input parameters
                     if input_params:
-                        params_str = ", ".join([f"{k}={v}" for k, v in input_params.items()])
+                        params_str = ", ".join(
+                            [f"{k}={v}" for k, v in input_params.items()]
+                        )
                         lines.append(f"  - Input: `{params_str}`")
-                    
+
                     # Show execution time if available
                     if execution_time is not None:
                         lines.append(f"  - Duration: {execution_time}ms")
-                    
+
                     # Try to get result from tool results map first (from raw data)
                     # This is where the actual API responses are stored
                     tool_result_from_raw = None
-                    
+
                     # Look for tool results using various possible IDs
                     # The raw conversation data might have tool_use_id that matches call_id
                     for raw_turn in raw_data:
-                        if raw_turn.get("role") == "assistant" and "_tool_calls" in raw_turn:
+                        if (
+                            raw_turn.get("role") == "assistant"
+                            and "_tool_calls" in raw_turn
+                        ):
                             for raw_tool_call in raw_turn["_tool_calls"]:
                                 if raw_tool_call.get("tool_name") == tool_name:
                                     call_id = raw_tool_call.get("call_id")
                                     if call_id and call_id in tool_results_map:
                                         tool_result_from_raw = tool_results_map[call_id]
                                         break
-                    
+
                     # Show result or error
                     if error:
                         lines.append(f"  - ❌ Error: `{error}`")

@@ -1,8 +1,13 @@
 """Tests for provider session isolation in parallel execution"""
+
 import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
-from src.test_mcp.providers.provider_interface import AnthropicProvider, ProviderMetrics, ProviderType
+from src.test_mcp.providers.provider_interface import (
+    AnthropicProvider,
+    ProviderMetrics,
+    ProviderType,
+)
 
 
 @pytest.mark.asyncio
@@ -22,7 +27,7 @@ async def test_parallel_session_creation():
     config = {
         "api_key": "test_key",
         "model": "claude-sonnet-4-20250514",
-        "mcp_servers": []
+        "mcp_servers": [],
     }
     provider = AnthropicProvider(config)
 
@@ -34,9 +39,7 @@ async def test_parallel_session_creation():
 
         # Create 5 parallel sessions
         session_ids = [f"session_{i}" for i in range(5)]
-        await asyncio.gather(*[
-            provider.start_session(sid) for sid in session_ids
-        ])
+        await asyncio.gather(*[provider.start_session(sid) for sid in session_ids])
 
         # Verify each has isolated session
         async with provider._sessions_lock:
@@ -51,7 +54,7 @@ async def test_parallel_session_cleanup():
     config = {
         "api_key": "test_key",
         "model": "claude-sonnet-4-20250514",
-        "mcp_servers": []
+        "mcp_servers": [],
     }
     provider = AnthropicProvider(config)
 
@@ -64,13 +67,11 @@ async def test_parallel_session_cleanup():
             provider.sessions[sid] = {
                 "created_at": 0.0,
                 "mcp_client": mock_client,
-                "server_ids": ["server_1"]
+                "server_ids": ["server_1"],
             }
 
     # Clean up all sessions in parallel
-    await asyncio.gather(*[
-        provider.end_session(sid) for sid in session_ids
-    ])
+    await asyncio.gather(*[provider.end_session(sid) for sid in session_ids])
 
     # Verify all cleaned up
     async with provider._sessions_lock:
@@ -133,7 +134,7 @@ async def test_session_dict_no_runtime_error():
     config = {
         "api_key": "test_key",
         "model": "claude-sonnet-4-20250514",
-        "mcp_servers": []
+        "mcp_servers": [],
     }
     provider = AnthropicProvider(config)
 
@@ -145,7 +146,7 @@ async def test_session_dict_no_runtime_error():
             provider.sessions[f"session_{i}"] = {
                 "created_at": 0.0,
                 "mcp_client": mock_client,
-                "server_ids": []
+                "server_ids": [],
             }
 
     # Concurrently read and modify
@@ -163,7 +164,7 @@ async def test_session_dict_no_runtime_error():
                 provider.sessions[f"session_{i}"] = {
                     "created_at": 0.0,
                     "mcp_client": mock_client,
-                    "server_ids": []
+                    "server_ids": [],
                 }
             await asyncio.sleep(0.001)
 

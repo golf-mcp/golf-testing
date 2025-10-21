@@ -145,11 +145,13 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                 {"role": "user", "content": prompt},
             ]
 
-            evaluation_data, _raw_response = self.openai_client.create_completion_with_json_parsing(
-                messages=messages,
-                max_tokens=50000,
-                temperature=0.1,
-                fallback_data=fallback_data,
+            evaluation_data, _raw_response = (
+                self.openai_client.create_completion_with_json_parsing(
+                    messages=messages,
+                    max_tokens=50000,
+                    temperature=0.1,
+                    fallback_data=fallback_data,
+                )
             )
 
             # Create JudgeEvaluation object using new unified model
@@ -206,9 +208,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
             )
 
     async def evaluate_conversations_parallel(
-        self,
-        conversations: list[ConversationResult],
-        max_concurrency: int = 5
+        self, conversations: list[ConversationResult], max_concurrency: int = 5
     ) -> list[JudgeEvaluation]:
         """Evaluate multiple conversations in parallel with controlled concurrency
 
@@ -235,27 +235,26 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                 # Run synchronous evaluation in executor to avoid blocking
                 loop = asyncio.get_event_loop()
                 evaluation = await loop.run_in_executor(
-                    None,
-                    self.evaluate_conversation,
-                    conversation
+                    None, self.evaluate_conversation, conversation
                 )
 
                 # Print quick result
                 result_symbol = "✅" if evaluation.success else "❌"
                 result_text = "pass" if evaluation.success else "fail"
                 confidence = evaluation.criteria_scores.get("confidence", 0.0)
-                goal_achieved = evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                goal_achieved = (
+                    evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                )
 
-                print(f"   {result_symbol} {result_text} (confidence: {confidence:.2f})")
+                print(
+                    f"   {result_symbol} {result_text} (confidence: {confidence:.2f})"
+                )
                 print(f"   Goal achieved: {'Yes' if goal_achieved else 'No'}")
 
                 return evaluation
 
         # Execute evaluations in parallel
-        tasks = [
-            evaluate_one(conv, i)
-            for i, conv in enumerate(conversations)
-        ]
+        tasks = [evaluate_one(conv, i) for i, conv in enumerate(conversations)]
 
         evaluations = await asyncio.gather(*tasks)
         return list(evaluations)
@@ -264,7 +263,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
         self,
         conversations: list[ConversationResult],
         parallel: bool = True,
-        max_concurrency: int = 5
+        max_concurrency: int = 5,
     ) -> list[JudgeEvaluation]:
         """Evaluate multiple conversations (sequential or parallel) - async version
 
@@ -278,7 +277,9 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
         """
         if parallel:
             # Use parallel evaluation
-            return await self.evaluate_conversations_parallel(conversations, max_concurrency)
+            return await self.evaluate_conversations_parallel(
+                conversations, max_concurrency
+            )
         else:
             # Keep existing sequential implementation for backward compatibility
             evaluations = []
@@ -295,9 +296,13 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                 result_symbol = "✅" if evaluation.success else "❌"
                 result_text = "pass" if evaluation.success else "fail"
                 confidence = evaluation.criteria_scores.get("confidence", 0.0)
-                goal_achieved = evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                goal_achieved = (
+                    evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                )
 
-                print(f"   {result_symbol} {result_text} (confidence: {confidence:.2f})")
+                print(
+                    f"   {result_symbol} {result_text} (confidence: {confidence:.2f})"
+                )
                 print(f"   Goal achieved: {'Yes' if goal_achieved else 'No'}")
 
             return evaluations
@@ -306,7 +311,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
         self,
         conversations: list[ConversationResult],
         parallel: bool = True,
-        max_concurrency: int = 5
+        max_concurrency: int = 5,
     ) -> list[JudgeEvaluation]:
         """Evaluate multiple conversations (sequential or parallel) - sync wrapper
 
@@ -325,6 +330,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
         if parallel:
             # Use parallel evaluation
             import asyncio
+
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
@@ -356,9 +362,13 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                 result_symbol = "✅" if evaluation.success else "❌"
                 result_text = "pass" if evaluation.success else "fail"
                 confidence = evaluation.criteria_scores.get("confidence", 0.0)
-                goal_achieved = evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                goal_achieved = (
+                    evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                )
 
-                print(f"   {result_symbol} {result_text} (confidence: {confidence:.2f})")
+                print(
+                    f"   {result_symbol} {result_text} (confidence: {confidence:.2f})"
+                )
                 print(f"   Goal achieved: {'Yes' if goal_achieved else 'No'}")
 
             return evaluations

@@ -76,7 +76,9 @@ class SharedTokenStorage(TokenStorage):
         self._cleanup_event = asyncio.Event()  # Use asyncio.Event
 
     @classmethod
-    async def get_instance(cls, server_url: str, session_id: str = None) -> "SharedTokenStorage":
+    async def get_instance(
+        cls, server_url: str, session_id: str = None
+    ) -> "SharedTokenStorage":
         """Get or create token storage, optionally scoped to session
 
         Args:
@@ -125,7 +127,7 @@ class SharedTokenStorage(TokenStorage):
         # Clear instances outside lock (no TOCTOU issue)
         await asyncio.gather(
             *[instance._clear_data() for instance in instances_to_clear],
-            return_exceptions=True  # Don't fail if one fails
+            return_exceptions=True,  # Don't fail if one fails
         )
 
     async def _clear_data(self):
@@ -334,7 +336,9 @@ class MCPClientManager:
         # Callback server management for OAuth flows
         # Lock protects creation and retrieval, but cleanup uses synchronous
         # dict.pop() which is atomic via Python's GIL (CPython implementation detail)
-        self._active_callback_servers: dict[str, CallbackServer] = {}  # Flow ID → server
+        self._active_callback_servers: dict[
+            str, CallbackServer
+        ] = {}  # Flow ID → server
         self._callback_lock = asyncio.Lock()  # Protects dict mutations (not cleanup)
 
     def _parse_command(self, command_str: str) -> tuple[str, list[str]]:
@@ -396,7 +400,9 @@ Please visit this URL to authorize the MCP Testing Framework:
 
         console.print()
 
-    async def _handle_oauth_callback(self, flow_id: str | None = None) -> tuple[str, str | None]:
+    async def _handle_oauth_callback(
+        self, flow_id: str | None = None
+    ) -> tuple[str, str | None]:
         """Handle OAuth callback using flow-specific callback server.
 
         Args:
@@ -416,7 +422,7 @@ Please visit this URL to authorize the MCP Testing Framework:
                 raise RuntimeError(f"No callback server found for flow {flow_id}")
         else:
             # Fallback to instance attribute for backward compatibility
-            callback_server = getattr(self, '_active_callback_server', None)
+            callback_server = getattr(self, "_active_callback_server", None)
             if not callback_server:
                 raise RuntimeError("No callback server available")
 
@@ -788,7 +794,9 @@ Please visit this URL to authorize the MCP Testing Framework:
                 )
 
                 # Create shared token storage and OAuth provider
-                token_storage = await SharedTokenStorage.get_instance(url, session_id=None)
+                token_storage = await SharedTokenStorage.get_instance(
+                    url, session_id=None
+                )
 
                 oauth_auth = OAuthClientProvider(
                     server_url=url,
@@ -811,8 +819,12 @@ Please visit this URL to authorize the MCP Testing Framework:
                         async with ClientSession(
                             read_stream, write_stream, client_info=client_info
                         ) as session:
-                            connection_timeout = server_config.get("connection_timeout", 30)
-                            await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
+                            connection_timeout = server_config.get(
+                                "connection_timeout", 30
+                            )
+                            await asyncio.wait_for(
+                                session.initialize(), timeout=connection_timeout
+                            )
 
                             try:
                                 yield session
@@ -825,7 +837,9 @@ Please visit this URL to authorize the MCP Testing Framework:
                         # Clean up flow-specific callback server
                         # Use synchronous dict.pop() to avoid async operations during cleanup
                         # This is thread-safe via Python's GIL for dict operations
-                        callback_server = self._active_callback_servers.pop(flow_id, None)
+                        callback_server = self._active_callback_servers.pop(
+                            flow_id, None
+                        )
                         if callback_server:
                             try:
                                 callback_server.stop()  # Blocks up to 2s, but acceptable in cleanup
@@ -974,9 +988,7 @@ The OAuth authorization code was received but token exchange failed.
             write_stream,
             _,
         ):
-            client_info = Implementation(
-                name="mcp-testing-framework", version="1.0.0"
-            )
+            client_info = Implementation(name="mcp-testing-framework", version="1.0.0")
             async with ClientSession(
                 read_stream, write_stream, client_info=client_info
             ) as session:
@@ -1037,10 +1049,14 @@ The OAuth authorization code was received but token exchange failed.
 
                 # Check if error is retryable
                 is_timeout = isinstance(e, TimeoutError) or "timeout" in str(e).lower()
-                is_connection_error = "Connection refused" in str(e) or "ConnectError" in str(e)
+                is_connection_error = "Connection refused" in str(
+                    e
+                ) or "ConnectError" in str(e)
 
                 # Last attempt or non-retryable error
-                if attempt >= max_retries - 1 or not (is_timeout or is_connection_error):
+                if attempt >= max_retries - 1 or not (
+                    is_timeout or is_connection_error
+                ):
                     # If recovery fails, mark as unhealthy
                     connection._is_healthy = False
                     raise RuntimeError(
@@ -1048,7 +1064,7 @@ The OAuth authorization code was received but token exchange failed.
                     ) from e
 
                 # Retry with exponential backoff
-                delay = base_delay * (2 ** attempt)
+                delay = base_delay * (2**attempt)
                 print(
                     f"Recovery attempt {attempt + 1}/{max_retries} failed for server {server_id}: {e}. "
                     f"Retrying in {delay}s...",
@@ -1058,7 +1074,9 @@ The OAuth authorization code was received but token exchange failed.
 
         # Should never reach here, but for type safety
         connection._is_healthy = False
-        raise RuntimeError(f"Unexpected error: Recovery failed after {max_retries} attempts")
+        raise RuntimeError(
+            f"Unexpected error: Recovery failed after {max_retries} attempts"
+        )
 
     @asynccontextmanager
     async def get_isolated_session(self, server_config: dict[str, Any]):
@@ -1153,17 +1171,27 @@ The OAuth authorization code was received but token exchange failed.
                 last_exception = e
 
                 # Check if error is retryable
-                is_timeout = isinstance(e, TimeoutError) or "timeout" in str(e).lower() or "ConnectTimeout" in str(e)
-                is_connection_error = "Connection refused" in str(e) or "ConnectError" in str(e)
+                is_timeout = (
+                    isinstance(e, TimeoutError)
+                    or "timeout" in str(e).lower()
+                    or "ConnectTimeout" in str(e)
+                )
+                is_connection_error = "Connection refused" in str(
+                    e
+                ) or "ConnectError" in str(e)
 
                 # Last attempt or non-retryable error
-                if attempt >= max_retries - 1 or not (is_timeout or is_connection_error):
+                if attempt >= max_retries - 1 or not (
+                    is_timeout or is_connection_error
+                ):
                     # Cleanup on final failure
                     if server_id in self._connection_locks:
                         del self._connection_locks[server_id]
                     if server_id in self._active_contexts:
                         try:
-                            await self._active_contexts[server_id].__aexit__(None, None, None)
+                            await self._active_contexts[server_id].__aexit__(
+                                None, None, None
+                            )
                         except Exception:
                             pass
                         del self._active_contexts[server_id]
@@ -1191,7 +1219,7 @@ The OAuth authorization code was received but token exchange failed.
                         ) from e
 
                 # Retry with exponential backoff
-                delay = base_delay * (2 ** attempt)
+                delay = base_delay * (2**attempt)
                 print(
                     f"Connection attempt {attempt + 1}/{max_retries} failed: {e}. "
                     f"Retrying in {delay}s...",
@@ -1298,7 +1326,7 @@ The OAuth authorization code was received but token exchange failed.
                 # Wrap tool execution with configurable timeout
                 result = await asyncio.wait_for(
                     connection.session.call_tool(tool_name, arguments),
-                    timeout=tool_timeout
+                    timeout=tool_timeout,
                 )
 
                 # Parse result content
@@ -1329,7 +1357,7 @@ The OAuth authorization code was received but token exchange failed.
                     "error": f"Tool '{tool_name}' execution timeout after {tool_timeout}s",
                     "error_type": "timeout",
                     "timeout_seconds": tool_timeout,
-                    "tool_name": tool_name
+                    "tool_name": tool_name,
                 }
 
             except Exception as e:
@@ -1345,14 +1373,17 @@ The OAuth authorization code was received but token exchange failed.
                     error_type = "timeout"
                 elif "connection" in error_str.lower():
                     error_type = "connection_error"
-                elif "permission" in error_str.lower() or "unauthorized" in error_str.lower():
+                elif (
+                    "permission" in error_str.lower()
+                    or "unauthorized" in error_str.lower()
+                ):
                     error_type = "permission_error"
 
                 return {
                     "success": False,
                     "error": error_str,
                     "error_type": error_type,
-                    "tool_name": tool_name
+                    "tool_name": tool_name,
                 }
 
     async def read_resource(self, server_id: str, resource_uri: str) -> dict[str, Any]:
@@ -1566,7 +1597,9 @@ The OAuth authorization code was received but token exchange failed.
                 # Clean up active context if it exists
                 if server_id in self._active_contexts:
                     try:
-                        await self._active_contexts[server_id].__aexit__(None, None, None)
+                        await self._active_contexts[server_id].__aexit__(
+                            None, None, None
+                        )
                     except Exception as e:
                         print(
                             f"Warning: Error closing connection context for {server_id}: {e}",

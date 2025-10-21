@@ -1,4 +1,5 @@
 """Tests for parallel OAuth callback race conditions"""
+
 import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
