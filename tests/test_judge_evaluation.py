@@ -3,6 +3,7 @@
 import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from rich.console import Console
 from src.test_mcp.cli.test_execution import (
     should_enable_judge_evaluation,
     evaluate_results_with_judge,
@@ -97,6 +98,8 @@ async def test_evaluate_results_runs_for_conversational():
     ]
     mock_console = Mock()
     mock_console.print = Mock()
+    # Use real Console for Rich Live context manager
+    mock_console.console = Console()
 
     # Mock the ConversationJudge
     with patch("src.test_mcp.cli.test_execution.ConversationJudge") as MockJudge:
@@ -145,6 +148,8 @@ async def test_evaluate_results_handles_both_formats():
     results = [parallel_result, sequential_result]
     mock_console = Mock()
     mock_console.print = Mock()
+    # Use real Console for Rich Live context manager
+    mock_console.console = Console()
 
     with patch("src.test_mcp.cli.test_execution.ConversationJudge") as MockJudge:
         mock_judge = Mock()
