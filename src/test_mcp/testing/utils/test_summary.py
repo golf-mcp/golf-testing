@@ -21,10 +21,11 @@ def generate_test_run_summary(test_run: TestRun) -> TestRunSummary:
         total_duration = (test_run.end_time - test_run.start_time).total_seconds()
 
     # Analyze failure patterns
-    failure_patterns = []
-    for execution in failed_tests + timeout_tests:
-        if execution.error_message:
-            failure_patterns.append(execution.error_message)
+    failure_patterns = [
+        execution.error_message
+        for execution in failed_tests + timeout_tests
+        if execution.error_message
+    ]
 
     # Count common failure types
     goal_not_achieved = len(

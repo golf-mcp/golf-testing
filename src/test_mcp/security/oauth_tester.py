@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field
 
 from ..shared.progress_tracker import ProgressTracker, TestStatus
 from ..shared.result_models import BaseTestResult, ErrorType, TestType
+from .connection_manipulator import ConnectionManipulator
+from .jwt_security_tester import JWTSecurityTester
+from .oauth_security_scanner import OAuthSecurityScanner
+from .session_manager import SessionLifecycleManager
+from .token_extractor import TokenExtractor
 
 
 class AuthTestResult(BaseTestResult):
@@ -107,12 +112,20 @@ class OAuthTester:
 
         return results
 
-    async def _run_token_validation_tests(self) -> list[AuthTestResult]:
-        """Test OAuth token validation"""
-        results = []
+    async def _get_test_tokens(self) -> list[dict[str, str]]:
+        """Get tokens for testing - prefer real tokens over hardcoded"""
+        test_tokens = []
 
-        # Test with invalid tokens
-        invalid_tokens = [
+        # Try to get real tokens first
+        extractor = TokenExtractor()
+        real_tokens = await extractor.get_real_tokens(self.server_url)
+
+        if real_tokens:
+            # Create manipulated versions of real tokens
+            test_tokens.extend(extractor.create_manipulated_tokens(real_tokens))
+
+        # Always include hardcoded fallback tokens
+        fallback_tokens = [
             {"token": "invalid_token_123", "description": "Invalid token format"},
             {"token": "expired_token_456", "description": "Expired token"},
             {"token": "", "description": "Empty token"},
@@ -122,6 +135,16 @@ class OAuthTester:
                 "description": "Invalid JWT payload",
             },
         ]
+        test_tokens.extend(fallback_tokens)
+
+        return test_tokens
+
+    async def _run_token_validation_tests(self) -> list[AuthTestResult]:
+        """Test OAuth token validation"""
+        results = []
+
+        # Test with invalid tokens (prefer real token manipulation over hardcoded)
+        invalid_tokens = await self._get_test_tokens()
 
         for token_info in invalid_tokens:
             result = await self._test_token_access(
@@ -405,14 +428,14 @@ class OAuthTester:
             )
 
     async def _run_session_management_tests(self) -> list[AuthTestResult]:
-        """Test session management security"""
+        """Test session management security using real MCP session lifecycle testing"""
         results = []
 
-        # Test session hijacking resistance
-        hijack_result = await self._test_session_hijacking()
-        results.append(hijack_result)
+        # Test session replay attacks using real MCP session lifecycles
+        replay_results = await self._test_session_replay_attacks()
+        results.extend(replay_results)
 
-        # Test session timeout
+        # Test session timeout with dynamic session testing (fallback to static if needed)
         timeout_result = await self._test_session_timeout()
         results.append(timeout_result)
 
@@ -422,25 +445,115 @@ class OAuthTester:
 
         return results
 
-    async def _test_session_hijacking(self) -> AuthTestResult:
-        """Test session hijacking resistance"""
+    async def _test_session_replay_attacks(self) -> list[AuthTestResult]:
+        """Test session replay with real session lifecycles"""
+        session_manager = SessionLifecycleManager()
+        results = []
+
+        try:
+            # Capture real session establishment
+            session_capture = await session_manager.capture_session_establishment(
+                self.server_config
+            )
+
+            # Test session ID reuse across connections
+            replay_result = await session_manager.replay_session_attack(session_capture)
+            results.append(
+                self._convert_replay_to_auth_result(replay_result, "session_replay")
+            )
+
+            # Test cross-client session contamination
+            contamination_result = await session_manager.test_session_contamination(
+                session_capture
+            )
+            results.append(
+                self._convert_replay_to_auth_result(
+                    contamination_result, "session_contamination"
+                )
+            )
+
+            # Test connection hijacking using ConnectionManipulator
+            connection_manipulator = ConnectionManipulator()
+            hijack_result = await connection_manipulator.test_connection_hijacking(
+                session_capture.server_id, session_capture.server_config
+            )
+            results.append(
+                self._convert_security_to_auth_result(
+                    hijack_result, "connection_hijacking"
+                )
+            )
+
+            # Test session fixation using real session patterns
+            fixation_result = await connection_manipulator.test_session_fixation(
+                session_capture
+            )
+            results.append(
+                self._convert_security_to_auth_result(
+                    fixation_result, "session_fixation_dynamic"
+                )
+            )
+
+        except Exception as e:
+            # Fallback to legacy session hijacking test if dynamic testing fails
+            legacy_result = await self._test_session_hijacking_legacy()
+            # Add error context to the legacy result
+            legacy_result.error_message = (
+                f"Dynamic session testing failed: {str(e)[:100]}"
+            )
+            results.append(legacy_result)
+
+        return results
+
+    def _convert_replay_to_auth_result(
+        self, replay_result, attack_type: str
+    ) -> AuthTestResult:
+        """Convert ReplayResult to AuthTestResult for consistency"""
+        return AuthTestResult(
+            test_id=replay_result.test_id,
+            auth_method="session_management",
+            bypass_attempted=f"{attack_type}: {replay_result.attack_type}",
+            start_time=replay_result.timestamp,
+            end_time=replay_result.timestamp,
+            duration=0.1,  # Placeholder duration
+            status=TestStatus.COMPLETED if replay_result.success else TestStatus.FAILED,
+            success=replay_result.success,
+            bypass_successful=replay_result.vulnerability_detected,
+            access_granted=replay_result.vulnerability_detected,
+            vulnerability_severity="high"
+            if replay_result.vulnerability_detected
+            else "low",
+        )
+
+    def _convert_security_to_auth_result(
+        self, security_result, attack_type: str
+    ) -> AuthTestResult:
+        """Convert SecurityResult to AuthTestResult for consistency"""
+        return AuthTestResult(
+            test_id=security_result.test_id,
+            auth_method="session_management",
+            bypass_attempted=f"{attack_type}: {security_result.attack_type}",
+            start_time=security_result.start_time,
+            end_time=security_result.end_time,
+            duration=security_result.duration,
+            status=security_result.status,
+            success=security_result.success,
+            bypass_successful=security_result.vulnerability_detected,
+            access_granted=security_result.vulnerability_detected,
+            vulnerability_severity=security_result.severity,
+            error_message=security_result.error_message,
+        )
+
+    async def _test_session_hijacking_legacy(self) -> AuthTestResult:
+        """Legacy session hijacking test (fallback)"""
         test_id = str(uuid4())
         start_time = datetime.now()
-
-        if self.progress_tracker:
-            self.progress_tracker.update_test_status(
-                test_id,
-                TestType.SECURITY,
-                TestStatus.RUNNING,
-                step_description="Testing session hijacking resistance",
-            )
 
         try:
             bypass_successful = False
             evidence = []
 
+            # Fallback to static tokens when dynamic testing fails
             async with httpx.AsyncClient(timeout=10.0) as client:
-                # Test session token reuse from different IPs (simulated)
                 session_tokens = [
                     "session_token_123",
                     "SESSIONID=abc123",
@@ -448,17 +561,15 @@ class OAuthTester:
                 ]
 
                 for token in session_tokens:
-                    # Test with different User-Agent and referrer to simulate hijacking
                     hijack_headers = {
                         "Cookie": token,
                         "User-Agent": "AttackerAgent/1.0",
-                        "X-Forwarded-For": "192.168.1.100",  # Different IP
+                        "X-Forwarded-For": "192.168.1.100",
                     }
 
                     response = await client.get(self.server_url, headers=hijack_headers)
 
                     if response.status_code == 200:
-                        # Check if session was improperly validated
                         response_text = response.text
                         if (
                             "welcome" in response_text.lower()
@@ -476,7 +587,7 @@ class OAuthTester:
             return AuthTestResult(
                 test_id=test_id,
                 auth_method="session_management",
-                bypass_attempted="session_hijacking",
+                bypass_attempted="session_hijacking_legacy",
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
@@ -491,7 +602,7 @@ class OAuthTester:
             return AuthTestResult(
                 test_id=test_id,
                 auth_method="session_management",
-                bypass_attempted="session_hijacking",
+                bypass_attempted="session_hijacking_legacy",
                 start_time=start_time,
                 end_time=datetime.now(),
                 duration=(datetime.now() - start_time).total_seconds(),
@@ -515,11 +626,29 @@ class OAuthTester:
             evidence = []
 
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # Create a mock old session token
-                old_session_headers = {
-                    "Cookie": "session=old_session_token_from_yesterday",
-                    "Authorization": "Bearer expired_token_12345",
-                }
+                # Try to get real tokens first, then create expired versions
+                extractor = TokenExtractor()
+                real_tokens = await extractor.get_real_tokens(self.server_url)
+
+                if real_tokens and real_tokens.get("access_token"):
+                    # Create expired version of real token
+                    expired_token = extractor.create_expired_token(
+                        real_tokens["access_token"]
+                    )
+                    old_session_headers = {
+                        "Authorization": f"Bearer {expired_token}",
+                        "Cookie": f"session=expired_{real_tokens['access_token'][:10]}",
+                    }
+                    evidence.append(
+                        "Using expired version of real token for timeout test"
+                    )
+                else:
+                    # Fallback to mock old session tokens when no real tokens available
+                    old_session_headers = {
+                        "Cookie": "session=old_session_token_from_yesterday",
+                        "Authorization": "Bearer expired_token_12345",
+                    }
+                    evidence.append("Using hardcoded expired tokens (fallback)")
 
                 response = await client.get(
                     self.server_url, headers=old_session_headers
@@ -636,6 +765,92 @@ class OAuthTester:
                 error_message=str(e),
                 error_type=ErrorType.EXECUTION,
             )
+
+    async def test_oauth_security_vulnerabilities(self) -> list[AuthTestResult]:
+        """Test for OAuth security vulnerabilities and bypass techniques"""
+        scanner = OAuthSecurityScanner(self.server_url)
+        jwt_tester = JWTSecurityTester(self.server_url)
+        results = []
+
+        try:
+            # Test resource indicator security bypass
+            resource_bypass = await scanner.test_resource_indicator_bypass(self.server_config)
+            results.append(
+                self._convert_security_to_auth_result(resource_bypass, "resource_indicator_bypass")
+            )
+
+            # Test metadata injection attacks
+            metadata_injection = await scanner.test_metadata_injection_attacks(self.server_url)
+            results.append(
+                self._convert_security_to_auth_result(metadata_injection, "metadata_injection")
+            )
+
+            # Test PKCE bypass attacks
+            pkce_bypass = await scanner.test_pkce_bypass_attacks(self.server_config)
+            results.append(
+                self._convert_security_to_auth_result(pkce_bypass, "pkce_bypass")
+            )
+
+            # Test JWT security vulnerabilities if we have real tokens
+            extractor = TokenExtractor()
+            real_tokens = await extractor.get_real_tokens(self.server_url)
+
+            if real_tokens and real_tokens.get("access_token"):
+                real_token = real_tokens["access_token"]
+
+                # Test JWT signature bypass attacks
+                signature_bypass = await jwt_tester.test_signature_bypass_attacks(
+                    real_token, self.server_url
+                )
+                results.append(
+                    self._convert_security_to_auth_result(signature_bypass, "jwt_signature_bypass")
+                )
+
+                # Test JWT validation bypass
+                validation_bypass = await jwt_tester.test_token_validation_bypass(real_token)
+                results.append(
+                    self._convert_security_to_auth_result(validation_bypass, "jwt_validation_bypass")
+                )
+
+                # Test JWT injection attacks
+                injection_attacks = await jwt_tester.test_jwt_injection_attacks(real_token)
+                results.append(
+                    self._convert_security_to_auth_result(injection_attacks, "jwt_injection")
+                )
+
+            else:
+                # Fallback: Test with a sample JWT when no real tokens available
+                sample_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0IiwiaXNzIjoidGVzdCIsImV4cCI6OTk5OTk5OTk5OX0.sample_signature"
+
+                signature_bypass = await jwt_tester.test_signature_bypass_attacks(
+                    sample_token, self.server_url
+                )
+                results.append(
+                    self._convert_security_to_auth_result(signature_bypass, "jwt_signature_bypass_fallback")
+                )
+
+        except Exception as e:
+            # Add a failure result if OAuth security testing fails
+            test_id = str(uuid4())
+            results.append(
+                AuthTestResult(
+                    test_id=test_id,
+                    auth_method="oauth_security_vulnerabilities",
+                    bypass_attempted="oauth_security_testing",
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
+                    duration=0.0,
+                    status=TestStatus.FAILED,
+                    success=False,
+                    bypass_successful=False,
+                    access_granted=False,
+                    vulnerability_severity="high",
+                    error_message=str(e),
+                    error_type=ErrorType.EXECUTION,
+                )
+            )
+
+        return results
 
     def generate_auth_security_report(
         self, results: list[AuthTestResult]

@@ -162,6 +162,7 @@ ignore_errors = true
 # Enable strict typing for well-typed modules
 [[tool.mypy.overrides]]
 module = "test_mcp.models.*"
+warn_return_any = true
 
 # Remove all disable_error_code suppressions for our code
 exclude = [

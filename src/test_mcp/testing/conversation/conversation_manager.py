@@ -3,6 +3,7 @@ import time
 import uuid
 from datetime import datetime
 from difflib import SequenceMatcher
+from typing import Literal
 
 from ...agent.agent import ClaudeAgent
 from ...agent.config import load_agent_config
@@ -57,7 +58,7 @@ class ConversationManager:
     def _add_conversation_turn(
         self,
         conversation: ConversationResult,
-        speaker: str,
+        speaker: Literal["user", "agent"],
         message: str,
         tool_calls: list[ToolCall] | None = None,
         duration: float | None = None,

@@ -234,7 +234,7 @@ def find_free_port(start_port: int = 3030, max_attempts: int = 100) -> int:
 class CallbackServer:
     """Local HTTP server to handle OAuth callbacks."""
 
-    def __init__(self, port: int = None):
+    def __init__(self, port: int | None = None):
         self.port = port or find_free_port()
         self.server = None
         self.thread = None
@@ -482,7 +482,7 @@ Please visit this URL to authorize the MCP Testing Framework:
                 ) from e
 
     def _build_client_metadata(
-        self, oauth_metadata: dict = None, callback_port: int = None
+        self, oauth_metadata: dict | None = None, callback_port: int | None = None
     ) -> OAuthClientMetadata:
         """Build OAuth client metadata using hardcoded testing defaults"""
 
@@ -862,7 +862,7 @@ The OAuth authorization code was received but token exchange failed.
 
 [yellow]Common Causes:[/yellow]
 • Server OAuth token endpoint is not working correctly
-• Client credentials or OAuth configuration is invalid  
+• Client credentials or OAuth configuration is invalid
 • Network connectivity issues during token exchange
 • Server-side token validation errors
 

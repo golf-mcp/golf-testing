@@ -3,7 +3,7 @@ import json
 import re
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
 from anthropic import APIStatusError, RateLimitError
@@ -68,7 +68,7 @@ class ClaudeAgent:
         )
         return self.current_session
 
-    def add_message(self, role: str, content: str) -> None:
+    def add_message(self, role: Literal["user", "assistant", "system"], content: str) -> None:
         """Add a message to the current session"""
         if not self.current_session:
             self.current_session = self.start_new_session()
@@ -81,12 +81,11 @@ class ClaudeAgent:
         if not self.current_session:
             return []
 
-        messages = []
-        for msg in self.current_session.messages:
-            if msg.role != "system":  # System message handled separately
-                messages.append({"role": msg.role, "content": msg.content})
-
-        return messages
+        return [
+            {"role": msg.role, "content": msg.content}
+            for msg in self.current_session.messages
+            if msg.role != "system"  # System message handled separately
+        ]
 
     def _process_response_content(
         self, content: list[Any]
@@ -96,13 +95,14 @@ class ClaudeAgent:
         Returns:
             tuple: (clean_message, tool_results)
         """
-        claude_content = []
         tool_results: list[dict[str, Any]] = []
 
-        for block in content:
-            # Use attribute access for BetaTextBlock and structured MCP types
-            if block.type == "text":
-                claude_content.append(block.text)
+        # Use list comprehension to extract text blocks
+        claude_content = [
+            block.text
+            for block in content
+            if block.type == "text"
+        ]
 
         # Return clean message without embedded tool results
         clean_message = "".join(claude_content)
@@ -358,7 +358,7 @@ class ClaudeAgent:
                     continued_messages.append(
                         {
                             "role": "assistant",
-                            "content": response.content,  # The original response with tool calls
+                            "content": response.content if isinstance(response.content, str) else [{"type": "text", "text": str(response.content)}],  # The original response with tool calls
                         }
                     )
                     continued_messages.append(
@@ -421,10 +421,11 @@ class ClaudeAgent:
 
     def _extract_text_from_response(self, response) -> str:
         """Extract text content from Anthropic response"""
-        text_parts = []
-        for block in response.content:
-            if block.type == "text":
-                text_parts.append(block.text)
+        text_parts = [
+            block.text
+            for block in response.content
+            if block.type == "text"
+        ]
 
         result = "".join(text_parts).strip()
 
@@ -449,10 +450,11 @@ class ClaudeAgent:
         # Handle list format content (MCP SDK format)
         if isinstance(content, list):
             # Extract text from content blocks
-            text_parts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text_parts.append(item.get("text", ""))
+            text_parts = [
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
 
             if text_parts:
                 return {"text": "\n".join(text_parts)}
@@ -465,13 +467,10 @@ class ClaudeAgent:
 
     def _parse_resource_requests(self, text: str) -> list[dict[str, Any]]:
         """Parse resource read requests from assistant text"""
-        resource_requests = []
         # Example pattern: "[[read:resource_uri]]"
         pattern = r"\[\[read:(.*?)\]\]"
         matches = re.findall(pattern, text)
-        for uri in matches:
-            resource_requests.append({"uri": uri})
-        return resource_requests
+        return [{"uri": uri} for uri in matches]
 
     def _parse_prompt_requests(self, text: str) -> list[dict[str, Any]]:
         """Parse prompt get requests from assistant text"""

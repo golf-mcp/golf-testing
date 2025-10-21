@@ -39,7 +39,7 @@ class OpenAIClientWrapper:
         Returns:
             Raw response content from OpenAI
         """
-        api_params = {
+        api_params: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "max_completion_tokens": max_tokens,
@@ -61,7 +61,7 @@ class OpenAIClientWrapper:
             if not content or content.strip() == "":
                 raise Exception("OpenAI returned empty response")
 
-            return content
+            return str(content)
         except Exception as e:
             raise Exception(f"OpenAI API call failed: {e!s}") from e
 
@@ -86,7 +86,8 @@ class OpenAIClientWrapper:
         elif "```" in json_str:
             json_str = json_str.split("```")[1].split("```")[0].strip()
 
-        return json.loads(json_str)
+        result: dict[str, Any] = json.loads(json_str)
+        return result
 
     def create_completion_with_json_parsing(
         self,

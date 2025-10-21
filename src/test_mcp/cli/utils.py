@@ -120,7 +120,9 @@ def ensure_local_results_directory():
 def _generate_markdown_report_safe(test_run_data: dict, json_file) -> None:
     """Generate markdown report alongside JSON, failing gracefully"""
     try:
-        from .markdown_report import generate_markdown_report  # noqa: F401 - imported here to avoid circular dependency
+        from .markdown_report import (
+            generate_markdown_report,
+        )
 
         markdown_file = json_file.with_suffix(".md")
         generate_markdown_report(test_run_data, markdown_file)

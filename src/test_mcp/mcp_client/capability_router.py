@@ -289,4 +289,8 @@ class MCPCapabilityRouter:
             ]
             return "\n\n".join(string_results)
         else:
-            return formatted_results
+            # For OpenAI, return only dictionary results, filter out strings
+            dict_results = [
+                result for result in formatted_results if isinstance(result, dict)
+            ]
+            return dict_results
