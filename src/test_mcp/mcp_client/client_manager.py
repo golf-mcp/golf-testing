@@ -331,8 +331,11 @@ class MCPClientManager:
         self._stdio_processes: dict[str, Any] = {}  # Track stdio subprocesses
         self._current_oauth_url: str | None = None  # Store current OAuth URL
         self._master_lock = asyncio.Lock()  # Master lock for safe lock creation
+        # Callback server management for OAuth flows
+        # Lock protects creation and retrieval, but cleanup uses synchronous
+        # dict.pop() which is atomic via Python's GIL (CPython implementation detail)
         self._active_callback_servers: dict[str, CallbackServer] = {}  # Flow ID → server
-        self._callback_lock = asyncio.Lock()  # Protect dict access
+        self._callback_lock = asyncio.Lock()  # Protects dict mutations (not cleanup)
 
     def _parse_command(self, command_str: str) -> tuple[str, list[str]]:
         """
@@ -688,7 +691,13 @@ Please visit this URL to authorize the MCP Testing Framework:
             ) as session:
                 connection_timeout = server_config.get("connection_timeout", 30)
                 await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
-                yield session
+
+                try:
+                    yield session
+                except GeneratorExit:
+                    # Generator is being closed - ensure process cleanup
+                    # ClientSession.__aexit__ will be called by context manager
+                    raise  # Re-raise to continue normal cleanup
 
         except Exception as e:
             raise RuntimeError(
@@ -729,8 +738,11 @@ Please visit this URL to authorize the MCP Testing Framework:
         self, server_config: dict[str, Any]
     ) -> AsyncGenerator[ClientSession, None]:
         """
-        Create a proper async context manager for MCP connections following the example pattern.
-        This ensures transport and session contexts are properly nested.
+        Create connection context for MCP server - SINGLE ATTEMPT ONLY.
+
+        Callers are responsible for retry logic. This simplifies cleanup
+        and prevents async generator issues during exception unwinding.
+
         Supports both HTTP and stdio transports.
         """
         # Determine transport type
@@ -801,21 +813,28 @@ Please visit this URL to authorize the MCP Testing Framework:
                         ) as session:
                             connection_timeout = server_config.get("connection_timeout", 30)
                             await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
-                            yield session
+
+                            try:
+                                yield session
+                            except GeneratorExit:
+                                # Generator is being closed (e.g., context manager exit)
+                                # Ensure session closes cleanly before propagating
+                                # ClientSession.__aexit__ will be called by context manager
+                                raise  # Re-raise to continue normal cleanup
                     finally:
-                        # Clean up flow-specific callback server with safe deletion
-                        async with self._callback_lock:
-                            if flow_id in self._active_callback_servers:
-                                try:
-                                    self._active_callback_servers[flow_id].stop()
-                                except Exception as stop_error:
-                                    print(
-                                        f"Warning: Error stopping callback server: {stop_error}",
-                                        file=sys.stderr,
-                                    )
-                                finally:
-                                    # Use pop with default to safely remove even if already deleted
-                                    self._active_callback_servers.pop(flow_id, None)
+                        # Clean up flow-specific callback server
+                        # Use synchronous dict.pop() to avoid async operations during cleanup
+                        # This is thread-safe via Python's GIL for dict operations
+                        callback_server = self._active_callback_servers.pop(flow_id, None)
+                        if callback_server:
+                            try:
+                                callback_server.stop()  # Blocks up to 2s, but acceptable in cleanup
+                            except Exception as stop_error:
+                                # Log but don't raise - we're in cleanup
+                                print(
+                                    f"Warning: Error stopping callback server for flow {flow_id}: {stop_error}",
+                                    file=sys.stderr,
+                                )
                 return
             except Exception as e:
                 console = Console()
@@ -930,10 +949,17 @@ The OAuth authorization code was received but token exchange failed.
                 ) from e
             finally:
                 # Clean up callback server on authentication failure
-                async with self._callback_lock:
-                    if flow_id in self._active_callback_servers:
-                        self._active_callback_servers[flow_id].stop()
-                        del self._active_callback_servers[flow_id]
+                # Use synchronous dict.pop() to avoid async operations during cleanup
+                callback_server = self._active_callback_servers.pop(flow_id, None)
+                if callback_server:
+                    try:
+                        callback_server.stop()
+                    except Exception as stop_error:
+                        # Log but don't raise - we're in cleanup
+                        print(
+                            f"Warning: Error stopping callback server for flow {flow_id}: {stop_error}",
+                            file=sys.stderr,
+                        )
 
         # Prepare headers with authentication for basic HTTP
         headers = {}
@@ -942,75 +968,39 @@ The OAuth authorization code was received but token exchange failed.
                 auth_token = f"Bearer {auth_token}"
             headers["Authorization"] = auth_token
 
-        # Follow the example pattern: nested async context managers with retry logic
-        max_retries = 3
-        last_exception = None
-
-        for attempt in range(max_retries):
-            try:
-                async with streamablehttp_client(url, headers=headers) as (
-                    read_stream,
-                    write_stream,
-                    _,
-                ):
-                    client_info = Implementation(
-                        name="mcp-testing-framework", version="1.0.0"
-                    )
-                    async with ClientSession(
-                        read_stream, write_stream, client_info=client_info
-                    ) as session:
-                        connection_timeout = server_config.get("connection_timeout", 30)
-                        await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
-                        yield session
-                        return  # Success - exit retry loop
-            except (TimeoutError, Exception) as e:
-                last_exception = e
-                # Check if it's a retryable error (timeout or connection issue)
-                is_timeout = isinstance(e, TimeoutError) or "timeout" in str(e).lower() or "ConnectTimeout" in str(e)
-                is_connection_error = "Connection refused" in str(e) or "ConnectError" in str(e)
-
-                if attempt < max_retries - 1 and (is_timeout or is_connection_error):
-                    # Wait with exponential backoff before retrying
-                    wait_time = 2 ** attempt  # 1s, 2s, 4s
-                    print(
-                        f"Connection attempt {attempt + 1}/{max_retries} failed for '{url}': {e}. "
-                        f"Retrying in {wait_time}s...",
-                        file=sys.stderr,
-                    )
-                    await asyncio.sleep(wait_time)
-                    continue
-                else:
-                    # Final attempt failed or non-retryable error - raise with context
-                    break
-
-        # All retries exhausted - convert to user-friendly error
-        if last_exception:
-            if "SSL" in str(last_exception) or "certificate" in str(last_exception).lower():
-                raise RuntimeError(
-                    f"SSL/Certificate error connecting to '{url}': {last_exception}"
-                ) from last_exception
-            elif "Connection refused" in str(last_exception) or "ConnectError" in str(last_exception):
-                raise RuntimeError(
-                    f"Cannot connect to server '{url}': Connection refused after {max_retries} attempts. "
-                    f"Please verify the server is running."
-                ) from last_exception
-            elif "timeout" in str(last_exception).lower() or "ConnectTimeout" in str(last_exception):
+        # Single attempt HTTP connection (no retry - callers handle retry)
+        async with streamablehttp_client(url, headers=headers) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            client_info = Implementation(
+                name="mcp-testing-framework", version="1.0.0"
+            )
+            async with ClientSession(
+                read_stream, write_stream, client_info=client_info
+            ) as session:
                 connection_timeout = server_config.get("connection_timeout", 30)
-                raise RuntimeError(
-                    f"Connection timeout to '{url}' after {max_retries} attempts "
-                    f"(timeout: {connection_timeout}s per attempt): {last_exception}"
-                ) from last_exception
-            else:
-                raise RuntimeError(
-                    f"Failed to connect to MCP server '{url}' after {max_retries} attempts: {last_exception}"
-                ) from last_exception
+                await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
+
+                try:
+                    yield session
+                except GeneratorExit:
+                    # Generator is being closed - ensure clean SSE shutdown
+                    # ClientSession.__aexit__ will be called by context manager
+                    raise  # Re-raise to continue normal cleanup
 
     async def _recover_connection(self, server_id: str) -> None:
         """
         Recover a failed connection by recreating the session context.
 
+        Implements retry logic with exponential backoff for recovery attempts.
+
         Args:
             server_id: ID of the connection to recover
+
+        Raises:
+            RuntimeError: Recovery failed after all retry attempts
         """
         connection = self.connections.get(server_id)
         if not connection:
@@ -1023,23 +1013,52 @@ The OAuth authorization code was received but token exchange failed.
             except Exception:
                 pass  # Ignore errors during cleanup
 
-        # Create new connection context
-        try:
-            context_manager = self._get_connection_context(connection.server_config)
-            session = await context_manager.__aenter__()
+        # Retry configuration (fewer retries for recovery)
+        max_retries = 2
+        base_delay = 1.0
+        last_exception = None
 
-            # Update connection with new session and context
-            connection.session = session
-            connection._context_stack = context_manager
-            connection._is_healthy = True
-            self._active_contexts[server_id] = context_manager
+        for attempt in range(max_retries):
+            try:
+                # Create new connection context (single attempt)
+                context_manager = self._get_connection_context(connection.server_config)
+                session = await context_manager.__aenter__()
 
-        except Exception as e:
-            # If recovery fails, mark as unhealthy
-            connection._is_healthy = False
-            raise RuntimeError(
-                f"Connection recovery failed for server {server_id}: {e}"
-            ) from e
+                # Update connection with new session and context
+                connection.session = session
+                connection._context_stack = context_manager
+                connection._is_healthy = True
+                self._active_contexts[server_id] = context_manager
+
+                return  # Success!
+
+            except Exception as e:
+                last_exception = e
+
+                # Check if error is retryable
+                is_timeout = isinstance(e, TimeoutError) or "timeout" in str(e).lower()
+                is_connection_error = "Connection refused" in str(e) or "ConnectError" in str(e)
+
+                # Last attempt or non-retryable error
+                if attempt >= max_retries - 1 or not (is_timeout or is_connection_error):
+                    # If recovery fails, mark as unhealthy
+                    connection._is_healthy = False
+                    raise RuntimeError(
+                        f"Connection recovery failed for server {server_id} after {max_retries} attempts: {e}"
+                    ) from e
+
+                # Retry with exponential backoff
+                delay = base_delay * (2 ** attempt)
+                print(
+                    f"Recovery attempt {attempt + 1}/{max_retries} failed for server {server_id}: {e}. "
+                    f"Retrying in {delay}s...",
+                    file=sys.stderr,
+                )
+                await asyncio.sleep(delay)
+
+        # Should never reach here, but for type safety
+        connection._is_healthy = False
+        raise RuntimeError(f"Unexpected error: Recovery failed after {max_retries} attempts")
 
     @asynccontextmanager
     async def get_isolated_session(self, server_config: dict[str, Any]):
@@ -1049,6 +1068,10 @@ The OAuth authorization code was received but token exchange failed.
         This context manager creates a fresh connection that is entered and exited
         within the same asyncio task, avoiding the "cancel scope in different task"
         error that occurs when sharing sessions across parallel tasks.
+
+        NOTE: This method does NOT implement retry logic. Test failures should
+        bubble up to the test framework for proper reporting. Use connect_server()
+        for persistent connections with retry logic.
 
         Args:
             server_config: Server configuration dict with type, url, auth, etc.
@@ -1076,11 +1099,16 @@ The OAuth authorization code was received but token exchange failed.
         """
         Connect to an MCP server and maintain persistent connection.
 
+        Implements retry logic with exponential backoff for connection failures.
+
         Args:
             server_config: Server configuration dict with type, url, auth, etc.
 
         Returns:
             server_id: Unique identifier for this server connection
+
+        Raises:
+            RuntimeError: Connection failed after all retry attempts
         """
         server_id = str(uuid.uuid4())
         # Use master lock to safely create per-server locks
@@ -1088,44 +1116,91 @@ The OAuth authorization code was received but token exchange failed.
             if server_id not in self._connection_locks:
                 self._connection_locks[server_id] = asyncio.Lock()
 
-        try:
-            # Create persistent connection context
-            context_manager = self._get_connection_context(server_config)
-            session = await context_manager.__aenter__()
+        # Retry configuration
+        max_retries = 3
+        base_delay = 1.0
+        last_exception = None
 
-            # Store the context for cleanup
-            self._active_contexts[server_id] = context_manager
+        for attempt in range(max_retries):
+            try:
+                # Create persistent connection context (single attempt)
+                context_manager = self._get_connection_context(server_config)
+                session = await context_manager.__aenter__()
 
-            # Discover capabilities during the initial connection
-            tools = await self._discover_tools(session)
-            resources = await self._discover_resources(session)
-            prompts = await self._discover_prompts(session)
+                # Store the context for cleanup
+                self._active_contexts[server_id] = context_manager
 
-            # Store connection info with persistent session
-            self.connections[server_id] = MCPServerConnection(
-                server_id=server_id,
-                session=session,  # Store persistent session
-                tools=tools,
-                resources=resources,
-                prompts=prompts,
-                server_config=server_config,
-                _context_stack=context_manager,
-                _is_healthy=True,
-            )
+                # Discover capabilities during the initial connection
+                tools = await self._discover_tools(session)
+                resources = await self._discover_resources(session)
+                prompts = await self._discover_prompts(session)
 
-            return server_id
+                # Store connection info with persistent session
+                self.connections[server_id] = MCPServerConnection(
+                    server_id=server_id,
+                    session=session,
+                    tools=tools,
+                    resources=resources,
+                    prompts=prompts,
+                    server_config=server_config,
+                    _context_stack=context_manager,
+                    _is_healthy=True,
+                )
 
-        except Exception as e:
-            # Cleanup on failure
-            if server_id in self._connection_locks:
-                del self._connection_locks[server_id]
-            if server_id in self._active_contexts:
-                try:
-                    await self._active_contexts[server_id].__aexit__(None, None, None)
-                except Exception:
-                    pass
-                del self._active_contexts[server_id]
-            raise e
+                return server_id  # Success!
+
+            except Exception as e:
+                last_exception = e
+
+                # Check if error is retryable
+                is_timeout = isinstance(e, TimeoutError) or "timeout" in str(e).lower() or "ConnectTimeout" in str(e)
+                is_connection_error = "Connection refused" in str(e) or "ConnectError" in str(e)
+
+                # Last attempt or non-retryable error
+                if attempt >= max_retries - 1 or not (is_timeout or is_connection_error):
+                    # Cleanup on final failure
+                    if server_id in self._connection_locks:
+                        del self._connection_locks[server_id]
+                    if server_id in self._active_contexts:
+                        try:
+                            await self._active_contexts[server_id].__aexit__(None, None, None)
+                        except Exception:
+                            pass
+                        del self._active_contexts[server_id]
+
+                    # Convert to user-friendly error
+                    url = server_config.get("url", "unknown")
+                    if "SSL" in str(e) or "certificate" in str(e).lower():
+                        raise RuntimeError(
+                            f"SSL/Certificate error connecting to '{url}': {e}"
+                        ) from e
+                    elif is_connection_error:
+                        raise RuntimeError(
+                            f"Cannot connect to server '{url}': Connection refused after {max_retries} attempts. "
+                            f"Please verify the server is running."
+                        ) from e
+                    elif is_timeout:
+                        connection_timeout = server_config.get("connection_timeout", 30)
+                        raise RuntimeError(
+                            f"Connection timeout to '{url}' after {max_retries} attempts "
+                            f"(timeout: {connection_timeout}s per attempt): {e}"
+                        ) from e
+                    else:
+                        raise RuntimeError(
+                            f"Failed to connect to MCP server '{url}' after {max_retries} attempts: {e}"
+                        ) from e
+
+                # Retry with exponential backoff
+                delay = base_delay * (2 ** attempt)
+                print(
+                    f"Connection attempt {attempt + 1}/{max_retries} failed: {e}. "
+                    f"Retrying in {delay}s...",
+                    file=sys.stderr,
+                )
+                await asyncio.sleep(delay)
+
+        # Should never reach here due to raise in loop, but for type safety
+        raise RuntimeError(f"Unexpected error: Failed after {max_retries} attempts")
 
     async def _discover_tools(self, session: ClientSession) -> list[dict[str, Any]]:
         """Discover available tools from MCP server"""
@@ -1508,7 +1583,7 @@ The OAuth authorization code was received but token exchange failed.
                 del self.connections[server_id]
 
     async def disconnect_all(self):
-        """Disconnect from all MCP servers and clean up persistent connections"""
+        """Disconnect from all MCP servers and clean up all resources"""
         # Create snapshot of contexts before cleanup to avoid iteration issues
         contexts_to_cleanup = list(self._active_contexts.items())
 
@@ -1524,16 +1599,33 @@ The OAuth authorization code was received but token exchange failed.
                 print("Full traceback:", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
 
+        # Clean up any remaining callback servers
+        # (shouldn't happen in normal flow, but prevents leaks)
+        for flow_id, callback_server in list(self._active_callback_servers.items()):
+            try:
+                callback_server.stop()
+            except Exception as e:
+                print(f"Error stopping callback server {flow_id}: {e}")
+
         # Clear all registries with lock protection to prevent race conditions
         async with self._master_lock:
             self._active_contexts.clear()
             self._connection_locks.clear()
             self.connections.clear()
+            self._active_callback_servers.clear()
 
     def force_disconnect_all(self):
         """Force disconnect from all MCP servers without awaiting cleanup"""
+        # Stop all callback servers synchronously
+        for flow_id, callback_server in list(self._active_callback_servers.items()):
+            try:
+                callback_server.stop()  # Synchronous call, blocks up to 2s per server
+            except Exception:
+                pass  # Ignore errors in force disconnect
+
         # Clear all registries immediately without awaiting context cleanup
         # This is used when async cleanup isn't possible (e.g., in sync cleanup methods)
         self._active_contexts.clear()
         self._connection_locks.clear()
         self.connections.clear()
+        self._active_callback_servers.clear()
