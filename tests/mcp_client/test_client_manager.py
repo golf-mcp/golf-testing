@@ -79,11 +79,14 @@ class TestMCPClientManager:
         mock_connection = MagicMock()
         mock_session = AsyncMock()
         mock_connection.session = mock_session
+        mock_connection._is_healthy = True
+        mock_connection.server_config = {}
 
-        # Mock tool result
+        # Mock tool result - needs proper async mock
         mock_result = MagicMock()
         mock_result.content = [MagicMock(type="text", text="Tool result")]
-        mock_session.call_tool.return_value = mock_result
+        # Use AsyncMock's return_value to properly handle awaiting
+        mock_session.call_tool = AsyncMock(return_value=mock_result)
 
         manager.connections["test-server"] = mock_connection
         manager._connection_locks["test-server"] = asyncio.Lock()

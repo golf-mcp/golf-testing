@@ -108,8 +108,8 @@ async def test_evaluate_results_runs_for_conversational():
             "reasoning": "Test passed",
             "success": True
         })
-        # Mock the async batch method which is now called
-        mock_judge.evaluate_conversations_batch_async = AsyncMock(return_value=[mock_eval_result])
+        # Mock the evaluate_conversation method (called in thread pool executor)
+        mock_judge.evaluate_conversation = Mock(return_value=mock_eval_result)
         MockJudge.return_value = mock_judge
 
         # Should run for conversational
@@ -159,8 +159,8 @@ async def test_evaluate_results_handles_both_formats():
             "reasoning": "Test passed",
             "success": True
         })
-        # Mock the async batch method which is now called
-        mock_judge.evaluate_conversations_batch_async = AsyncMock(return_value=[mock_eval_result, mock_eval_result])
+        # Mock the evaluate_conversation method (called in thread pool executor)
+        mock_judge.evaluate_conversation = Mock(return_value=mock_eval_result)
         MockJudge.return_value = mock_judge
 
         await evaluate_results_with_judge(
