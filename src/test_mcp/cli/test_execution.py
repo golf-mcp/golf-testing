@@ -447,13 +447,44 @@ async def run_tests_parallel(
                 # Clean up session (suppress cleanup errors to avoid masking original error)
                 try:
                     await provider.end_session(session_id)
-                except Exception as cleanup_error:
-                    # Log cleanup errors but don't propagate them
+                except (RuntimeError, GeneratorExit) as e:
+                    # Handle task-scope violations during cleanup
+                    error_msg = str(e)
+                    if (
+                        "cancel scope" in error_msg
+                        or "different task" in error_msg
+                        or "athrow" in error_msg
+                    ):
+                        if progress_tracker:
+                            progress_tracker.update_test_status(
+                                test_id=test_case_def.test_id,
+                                status="cleanup_warning",
+                                error_message="Cleanup warning: Task-scope violation (expected in parallel execution)",
+                            )
+                    else:
+                        if progress_tracker:
+                            progress_tracker.update_test_status(
+                                test_id=test_case_def.test_id,
+                                status="cleanup_warning",
+                                error_message=f"Cleanup warning: {type(e).__name__}: {error_msg}",
+                            )
+                except asyncio.CancelledError:
+                    # Task cancelled during cleanup
                     if progress_tracker:
                         progress_tracker.update_test_status(
                             test_id=test_case_def.test_id,
                             status="cleanup_warning",
-                            error_message=f"Cleanup warning: {cleanup_error}",
+                            error_message="Cleanup warning: Cleanup cancelled",
+                        )
+                except Exception as e:
+                    # Log all other cleanup errors
+                    error_msg = str(e)
+                    error_type = type(e).__name__
+                    if progress_tracker:
+                        progress_tracker.update_test_status(
+                            test_id=test_case_def.test_id,
+                            status="cleanup_warning",
+                            error_message=f"Cleanup warning: {error_type}: {error_msg}",
                         )
 
                 # Mark test as completed in progress tracker
@@ -707,9 +738,61 @@ async def execute_test_cases(
                 f"[yellow]Warning: Could not save results to file: {e!s}[/yellow]"
             )
 
+        # Clean up provider sessions and connections
+        try:
+            # Clean up any remaining sessions in the provider
+            if hasattr(provider, "sessions") and provider.sessions:
+                session_ids = list(provider.sessions.keys())
+                for sid in session_ids:
+                    try:
+                        await provider.end_session(sid)
+                    except Exception:
+                        # Log but don't crash on provider cleanup errors
+                        pass
+        except (RuntimeError, GeneratorExit) as e:
+            error_msg = str(e)
+            if (
+                "cancel scope" in error_msg
+                or "different task" in error_msg
+                or "athrow" in error_msg
+            ):
+                console.print(
+                    "[dim]⚠️  Provider cleanup: Task-scope violation (expected in parallel execution)[/dim]"
+                )
+            else:
+                console.print(
+                    f"[yellow]⚠️  Provider cleanup warning: {type(e).__name__}[/yellow]"
+                )
+        except asyncio.CancelledError:
+            console.print("[dim]⚠️  Provider cleanup cancelled[/dim]")
+        except Exception as e:
+            error_type = type(e).__name__
+            if "timeout" in str(e).lower() or "Timeout" in error_type:
+                console.print("[dim]⚠️  Provider cleanup timeout[/dim]")
+            else:
+                console.print(
+                    f"[yellow]⚠️  Provider cleanup warning: {error_type}[/yellow]"
+                )
+
         # Async token cleanup
         try:
             await SharedTokenStorage.clear_all_async()
+        except (RuntimeError, GeneratorExit) as e:
+            error_msg = str(e)
+            if (
+                "cancel scope" in error_msg
+                or "different task" in error_msg
+                or "athrow" in error_msg
+            ):
+                console.print(
+                    "[dim]⚠️  Token cleanup: Task-scope violation (expected)[/dim]"
+                )
+            else:
+                console.print(
+                    f"[yellow]⚠️  Token cleanup warning: {type(e).__name__}[/yellow]"
+                )
+        except asyncio.CancelledError:
+            console.print("[dim]⚠️  Token cleanup cancelled[/dim]")
         except Exception as e:
             console.print(f"[yellow]⚠️  Token cleanup warning: {e}[/yellow]")
 

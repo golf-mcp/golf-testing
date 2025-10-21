@@ -983,24 +983,68 @@ The OAuth authorization code was received but token exchange failed.
             headers["Authorization"] = auth_token
 
         # Single attempt HTTP connection (no retry - callers handle retry)
-        async with streamablehttp_client(url, headers=headers) as (
-            read_stream,
-            write_stream,
-            _,
-        ):
-            client_info = Implementation(name="mcp-testing-framework", version="1.0.0")
-            async with ClientSession(
-                read_stream, write_stream, client_info=client_info
-            ) as session:
-                connection_timeout = server_config.get("connection_timeout", 30)
-                await asyncio.wait_for(session.initialize(), timeout=connection_timeout)
+        # Wrap with comprehensive error handling for task-scope violations during cleanup
+        try:
+            async with streamablehttp_client(url, headers=headers) as (
+                read_stream,
+                write_stream,
+                _,
+            ):
+                client_info = Implementation(
+                    name="mcp-testing-framework", version="1.0.0"
+                )
+                async with ClientSession(
+                    read_stream, write_stream, client_info=client_info
+                ) as session:
+                    connection_timeout = server_config.get("connection_timeout", 30)
+                    await asyncio.wait_for(
+                        session.initialize(), timeout=connection_timeout
+                    )
 
-                try:
-                    yield session
-                except GeneratorExit:
-                    # Generator is being closed - ensure clean SSE shutdown
-                    # ClientSession.__aexit__ will be called by context manager
-                    raise  # Re-raise to continue normal cleanup
+                    try:
+                        yield session
+                    except GeneratorExit:
+                        # Generator is being closed - ensure clean SSE shutdown
+                        # ClientSession.__aexit__ will be called by context manager
+                        raise  # Re-raise to continue normal cleanup
+        except (RuntimeError, GeneratorExit) as e:
+            # Handle task-scope violations during cleanup
+            error_msg = str(e)
+            if (
+                "cancel scope" in error_msg
+                or "different task" in error_msg
+                or "athrow" in error_msg
+            ):
+                # Suppress task-scope violations during cleanup - these are expected
+                # when async generators are cleaned up across task boundaries
+                print(
+                    f"Session termination failed: {type(e).__name__}: {error_msg}",
+                    file=sys.stderr,
+                )
+            else:
+                # Re-raise unexpected RuntimeErrors
+                raise
+        except asyncio.CancelledError:
+            # Task was cancelled - suppress and log
+            print(
+                "Session termination cancelled during async cleanup",
+                file=sys.stderr,
+            )
+        except Exception as e:
+            # Catch connection timeouts and other errors during cleanup
+            error_msg = str(e)
+            if "timeout" in error_msg.lower() or "ConnectTimeout" in type(e).__name__:
+                # Log timeout errors during cleanup but don't crash
+                print(
+                    f"Connection timeout during session termination: {type(e).__name__}",
+                    file=sys.stderr,
+                )
+            else:
+                # Log unexpected errors but don't crash cleanup
+                print(
+                    f"Error during session termination: {type(e).__name__}: {error_msg}",
+                    file=sys.stderr,
+                )
 
     async def _recover_connection(self, server_id: str) -> None:
         """
@@ -1624,13 +1668,42 @@ The OAuth authorization code was received but token exchange failed.
         for server_id, context_manager in contexts_to_cleanup:
             try:
                 await context_manager.__aexit__(None, None, None)
-            except Exception as e:
+            except (RuntimeError, GeneratorExit) as e:
+                # Handle task-scope violations during cleanup
+                error_msg = str(e)
+                if (
+                    "cancel scope" in error_msg
+                    or "different task" in error_msg
+                    or "athrow" in error_msg
+                ):
+                    print(
+                        f"⚠️  Cleanup warning for {server_id}: Task-scope violation during async cleanup (expected in parallel execution)",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"⚠️  Cleanup warning for {server_id}: {type(e).__name__}: {error_msg}",
+                        file=sys.stderr,
+                    )
+            except asyncio.CancelledError:
                 print(
-                    f"Warning: Error closing connection context for {server_id}: {e}",
+                    f"⚠️  Cleanup warning for {server_id}: Connection cleanup cancelled",
                     file=sys.stderr,
                 )
-                print("Full traceback:", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
+            except Exception as e:
+                # Catch all other errors and log them clearly
+                error_msg = str(e)
+                error_type = type(e).__name__
+                if "timeout" in error_msg.lower() or "Timeout" in error_type:
+                    print(
+                        f"⚠️  Cleanup warning for {server_id}: Connection timeout during cleanup",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"⚠️  Cleanup warning for {server_id}: {error_type}: {error_msg}",
+                        file=sys.stderr,
+                    )
 
         # Clean up any remaining callback servers
         # (shouldn't happen in normal flow, but prevents leaks)
