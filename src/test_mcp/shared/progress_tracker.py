@@ -152,7 +152,7 @@ class ProgressTracker:
                 progress.details["end_time"] = datetime.now()
                 self.test_progress_bars.update(
                     progress.progress_task_id,
-                    description="✅ Completed",
+                    description="Completed",
                     completed=progress.total_steps,
                 )
                 # Update overall progress
