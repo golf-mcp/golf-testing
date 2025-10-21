@@ -337,18 +337,22 @@ async def run_tests_parallel(
     semaphore = asyncio.Semaphore(max_parallelism)
 
     async def run_single_test(test_case_def, test_index):
+        session_id = f"test_{test_case_def.test_id}_{test_index}"
+
+        # Create progress bar for this test with 5 realistic stages
+        if progress_tracker:
+            progress_tracker.create_test_progress_bar(
+                test_id=test_case_def.test_id,
+                test_name=test_case_def.test_id,
+                total_steps=5,
+            )
+            progress_tracker.update_test_progress_bar(
+                test_id=test_case_def.test_id,
+                status_message="Queued",
+                current_step=0,
+            )
+
         async with semaphore:
-            session_id = f"test_{test_case_def.test_id}_{test_index}"
-
-            # Initialize progress tracking
-            if progress_tracker:
-                progress_tracker.update_parallel_test_progress(
-                    test_id=test_case_def.test_id,
-                    step_description="Queued, waiting for slot...",
-                    current_step=0,
-                    total_steps=4,
-                )
-
             # Rate limiting
             if rate_limiter:
                 await rate_limiter.acquire_request_slot(provider.provider_type.value)
@@ -363,29 +367,32 @@ async def run_tests_parallel(
                 suite_metrics.test_metrics.append(test_metrics)
 
             try:
-                # Start isolated session
+                # Stage 1: Initialize agent session and connect to MCP server
                 if progress_tracker:
-                    progress_tracker.update_parallel_test_progress(
+                    progress_tracker.update_test_progress_bar(
                         test_id=test_case_def.test_id,
-                        step_description="Starting session...",
+                        status_message="Connecting to MCP server",
                         current_step=1,
-                        total_steps=4,
                     )
 
                 await provider.start_session(session_id)
 
-                # Run test using provider interface
+                # Stage 2: Multi-turn conversation with agent
                 if progress_tracker:
-                    progress_tracker.update_parallel_test_progress(
+                    progress_tracker.update_test_progress_bar(
                         test_id=test_case_def.test_id,
-                        step_description="Running conversation...",
+                        status_message="Running conversation",
                         current_step=2,
-                        total_steps=4,
                     )
 
+                # Run test - this handles multi-turn conversation and tool calling
+                # progress_tracker will update to stage 3 when tools are called
                 result = await run_conversation_with_provider(
-                    provider, test_case_def, session_id
+                    provider, test_case_def, session_id, progress_tracker
                 )
+
+                # Stage 4: Process results (no action needed - happens in run_conversation_with_provider)
+                # This stage is implicit - result structure is already built
 
                 # Update performance metrics
                 if test_metrics:
@@ -398,15 +405,6 @@ async def run_tests_parallel(
                     ) == "completed" and result.get("result", {}).get("success", False)
                     test_metrics.api_calls_made = (
                         1  # Simplified - one API call per test
-                    )
-
-                # Mark test as completing (before cleanup)
-                if progress_tracker:
-                    progress_tracker.update_parallel_test_progress(
-                        test_id=test_case_def.test_id,
-                        step_description="Cleaning up session...",
-                        current_step=3,
-                        total_steps=4,
                     )
 
                 return result
@@ -423,10 +421,9 @@ async def run_tests_parallel(
 
                 # Mark test as failed in progress tracker
                 if progress_tracker:
-                    progress_tracker.update_test_status(
+                    progress_tracker.mark_test_failed(
                         test_id=test_case_def.test_id,
-                        status="failed",
-                        error_message=str(e),
+                        error_message=str(e)[:50],
                     )
 
                 # Store the error to return after cleanup
@@ -461,13 +458,12 @@ async def run_tests_parallel(
                                 status="cleanup_warning",
                                 error_message="Cleanup warning: Task-scope violation (expected in parallel execution)",
                             )
-                    else:
-                        if progress_tracker:
-                            progress_tracker.update_test_status(
-                                test_id=test_case_def.test_id,
-                                status="cleanup_warning",
-                                error_message=f"Cleanup warning: {type(e).__name__}: {error_msg}",
-                            )
+                    elif progress_tracker:
+                        progress_tracker.update_test_status(
+                            test_id=test_case_def.test_id,
+                            status="cleanup_warning",
+                            error_message=f"Cleanup warning: {type(e).__name__}: {error_msg}",
+                        )
                 except asyncio.CancelledError:
                     # Task cancelled during cleanup
                     if progress_tracker:
@@ -487,8 +483,8 @@ async def run_tests_parallel(
                             error_message=f"Cleanup warning: {error_type}: {error_msg}",
                         )
 
-                # Mark test as completed in progress tracker
-                if progress_tracker:
+                # Mark test as completed in progress tracker (Stage 5)
+                if progress_tracker and "error_result" not in locals():
                     # Determine final status based on result
                     success = False
                     if "result" in locals():
@@ -496,13 +492,12 @@ async def run_tests_parallel(
                             "result", {}
                         ).get("success", False)
 
-                    progress_tracker.update_parallel_test_progress(
+                    progress_tracker.update_test_progress_bar(
                         test_id=test_case_def.test_id,
-                        step_description="Completed successfully"
+                        status_message="Completed"
                         if success
-                        else "Completed with errors",
-                        current_step=4,
-                        total_steps=4,
+                        else "Completed with warnings",
+                        current_step=5,
                         completed=True,
                     )
 
@@ -591,6 +586,12 @@ async def execute_test_cases(
     # ==== PARALLEL EXECUTION PATH ====
     # Route through parallel infrastructure when parallelism > 1
     if parallelism > 1:
+        # Print header with test count and parallelism info
+        console.print(
+            f"\n[bold cyan]Running {len(test_cases)} test{'s' if len(test_cases) != 1 else ''} "
+            f"(max {parallelism} in parallel)[/bold cyan]\n"
+        )
+
         # Create provider for parallel execution
         provider = create_provider_from_config(server_config)
 
@@ -601,9 +602,11 @@ async def execute_test_cases(
             parallelism_used=parallelism,
         )
 
-        # Use Rich Live context for real-time progress updates (same as sequential path)
+        # Use Rich Live context for real-time progress updates with per-test progress bars
         with Live(
-            progress_tracker.progress, console=console.console, refresh_per_second=2
+            progress_tracker.get_renderable_group(),
+            console=console.console,
+            refresh_per_second=4,
         ):
             # Execute tests in parallel using existing infrastructure
             parallel_results = await run_tests_parallel(
@@ -807,7 +810,10 @@ async def execute_test_cases(
 
     # ==== SEQUENTIAL EXECUTION PATH ====
     # Original sequential execution for parallelism=1
-    console.print(f"Running {len(test_cases)} tests sequentially")
+    console.print(
+        f"\n[bold cyan]Running {len(test_cases)} test{'s' if len(test_cases) != 1 else ''} "
+        f"(sequential execution)[/bold cyan]\n"
+    )
 
     # Use Rich Live context for real-time updates (same pattern as enhanced progress)
     with Live(progress_tracker.progress, console=console.console, refresh_per_second=2):
@@ -1649,7 +1655,7 @@ def create_provider_from_config(server_config) -> ProviderInterface:
 
 
 async def run_conversation_with_provider(
-    provider: ProviderInterface, test_case_def, session_id
+    provider: ProviderInterface, test_case_def, session_id, progress_tracker=None
 ) -> dict:
     """Run conversation using provider interface with full tool tracking"""
     start_time = time.time()
@@ -1666,6 +1672,27 @@ async def run_conversation_with_provider(
         response = metadata["response"]
         tools_used = metadata["tools_used"]
         raw_messages = metadata["raw_messages"]
+
+        # Stage 3: Show conversation progress (turns and tools)
+        if progress_tracker:
+            # Count actual conversation turns (user + agent pairs)
+            turn_count = len([m for m in raw_messages if m.get("role") == "user"])
+
+            if tools_used:
+                progress_tracker.update_test_progress_bar(
+                    test_id=test_case_def.test_id,
+                    status_message=f"{turn_count} turn(s), {len(tools_used)} tool(s)",
+                    current_step=3,
+                )
+            elif turn_count > 1:
+                progress_tracker.update_test_progress_bar(
+                    test_id=test_case_def.test_id,
+                    status_message=f"{turn_count} conversation turn(s)",
+                    current_step=3,
+                )
+            else:
+                # Single turn, no tools - skip stage 3
+                pass
 
         end_time = time.time()
         duration = end_time - start_time

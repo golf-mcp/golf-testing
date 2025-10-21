@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from rich.console import Group
 from rich.progress import (
     BarColumn,
     Progress,
@@ -35,13 +36,16 @@ class TestProgress:
     details: dict[str, Any] | None = None
     error_message: str | None = None
 
+    # Per-test progress bar tracking
+    progress_task_id: Any = None
+
     def __post_init__(self) -> None:
         if self.details is None:
             self.details = {}
 
 
 class ProgressTracker:
-    """Progress tracking for all test types"""
+    """Progress tracking for all test types with per-test progress bars"""
 
     def __init__(
         self, total_tests: int, parallelism: int, test_types: list[str] | None = None
@@ -56,8 +60,8 @@ class ProgressTracker:
         self._thread_lock = threading.Lock()  # For synchronous calls
         self._async_lock = None  # Will be created when needed for async calls
 
-        # Setup rich progress components
-        self.progress = Progress(
+        # Setup overall progress bar
+        self.overall_progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
             BarColumn(),
@@ -66,10 +70,112 @@ class ProgressTracker:
             console=self.console,
         )
 
-        self.overall_task = self.progress.add_task(
-            f"Running {total_tests} tests (max {parallelism} parallel)",
+        self.overall_task = self.overall_progress.add_task(
+            "Overall Progress",
             total=total_tests,
         )
+
+        # Setup per-test progress bars
+        self.test_progress_bars = Progress(
+            TextColumn("[bold cyan]{task.fields[test_name]:<30}"),
+            SpinnerColumn(),
+            TextColumn("[dim]{task.description}"),
+            BarColumn(bar_width=20),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=self.console,
+        )
+
+        # Combined progress for Rich display
+        self.progress = self.overall_progress  # For backward compatibility
+
+    def get_renderable_group(self) -> Group:
+        """Get a Rich Group containing all progress bars for display"""
+        return Group(self.overall_progress, self.test_progress_bars)
+
+    def create_test_progress_bar(
+        self, test_id: str, test_name: str, total_steps: int = 10
+    ) -> None:
+        """Create a progress bar for a specific test"""
+        with self._thread_lock:
+            if test_id not in self.test_progress:
+                self.test_progress[test_id] = TestProgress(
+                    test_id=test_id,
+                    test_type=SuiteCategory.CONVERSATION,
+                    status=ExecutionStatus.QUEUED,
+                    start_time=datetime.now(),
+                    total_steps=total_steps,
+                )
+
+            # Create progress task for this test
+            task_id = self.test_progress_bars.add_task(
+                "Queued",
+                total=total_steps,
+                test_name=test_name[:28],  # Truncate long names
+            )
+            self.test_progress[test_id].progress_task_id = task_id
+
+    def update_test_progress_bar(
+        self,
+        test_id: str,
+        status_message: str,
+        current_step: int | None = None,
+        completed: bool = False,
+    ) -> None:
+        """Update a test's progress bar with new status"""
+        with self._thread_lock:
+            if test_id not in self.test_progress:
+                return
+
+            progress = self.test_progress[test_id]
+            if progress.progress_task_id is None:
+                return
+
+            # Update step description
+            progress.step_description = status_message
+
+            # Update current step
+            if current_step is not None:
+                progress.current_step = current_step
+
+            # Update the progress bar
+            self.test_progress_bars.update(
+                progress.progress_task_id,
+                description=status_message[:40],  # Truncate long messages
+                completed=current_step or 0,
+            )
+
+            # Mark as completed if done
+            if completed:
+                progress.status = ExecutionStatus.COMPLETED
+                if progress.details is None:
+                    progress.details = {}
+                progress.details["end_time"] = datetime.now()
+                self.test_progress_bars.update(
+                    progress.progress_task_id,
+                    description="✅ Completed",
+                    completed=progress.total_steps,
+                )
+                # Update overall progress
+                self.overall_progress.advance(self.overall_task, 1)
+
+    def mark_test_failed(self, test_id: str, error_message: str) -> None:
+        """Mark a test as failed in its progress bar"""
+        with self._thread_lock:
+            if test_id not in self.test_progress:
+                return
+
+            progress = self.test_progress[test_id]
+            progress.status = ExecutionStatus.FAILED
+            progress.error_message = error_message
+
+            if progress.progress_task_id is not None:
+                self.test_progress_bars.update(
+                    progress.progress_task_id,
+                    description=f"❌ Failed: {error_message[:25]}",
+                    completed=progress.total_steps,
+                )
+            # Update overall progress
+            self.overall_progress.advance(self.overall_task, 1)
 
     def _get_async_lock(self):
         """Get or create async lock for asyncio contexts with thread safety"""
