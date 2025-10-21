@@ -1,6 +1,0 @@
-{
-  "url": "https://slow-mcp-server.example.com/mcp",
-  "name": "slow_server_example",
-  "tool_timeout": 120,
-  "connection_timeout": 45
-}
