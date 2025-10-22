@@ -669,16 +669,20 @@ async def execute_test_cases(
         console.print("\n[bold]Results:[/bold]")
 
         # Show successful tests with test names
+        # Use evaluation.success if available, otherwise fall back to execution success
         successful_results = [
-            r for r in results if r.get("evaluation", {}).get("success", True)
+            r for r in results
+            if r.get("evaluation", {}).get("success", r.get("success", False))
         ]
         for result in successful_results:
             test_id = result.get("test_id", "unknown")
             console.print(f"  ✅ {test_id}")
 
         # Show failed tests with full reasoning (not truncated)
+        # Use evaluation.success if available, otherwise fall back to execution success
         failed_tests = [
-            r for r in results if not r.get("evaluation", {}).get("success", True)
+            r for r in results
+            if not r.get("evaluation", {}).get("success", r.get("success", False))
         ]
         for result in failed_tests:
             test_id = result.get("test_id", "unknown")
@@ -1065,24 +1069,22 @@ async def execute_test_cases(
     console.print("\n[bold]Results:[/bold]")
 
     # Show successful tests with test names
+    # Use evaluation.success if available, otherwise fall back to execution success
     successful_results = [
         r
         for r in results
-        if r.get("evaluation", {}).get("success", True)
-        or (not r.get("evaluation") and r.get("success", True))
+        if r.get("evaluation", {}).get("success", r.get("success", False))
     ]
     for result in successful_results:
         test_id = result.get("test_id", "unknown")
         console.print(f"  ✅ {test_id}")
 
     # Show failed tests with full reasoning (not truncated)
+    # Use evaluation.success if available, otherwise fall back to execution success
     failed_tests = [
         r
         for r in results
-        if not (
-            r.get("evaluation", {}).get("success", True)
-            or (not r.get("evaluation") and r.get("success", True))
-        )
+        if not r.get("evaluation", {}).get("success", r.get("success", False))
     ]
     for result in failed_tests:
         test_id = result.get("test_id", "unknown")
