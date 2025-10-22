@@ -563,6 +563,50 @@ async def execute_test_cases(
     results = []
     successful_tests = 0
 
+    # Handle OAuth authentication if configured
+    if hasattr(server_config, "oauth") and server_config.oauth:
+        console.print("\n[bold yellow]🔐 OAuth Authentication Required[/bold yellow]")
+        console.print("Starting OAuth flow to authenticate with the server...")
+
+        try:
+            # Import MCPClientManager to handle OAuth
+            from test_mcp.mcp_client.client_manager import MCPClientManager
+
+            # Create client manager and perform OAuth authentication
+            client_manager = MCPClientManager()
+
+            # Convert server config to dict for MCPClientManager
+            server_config_dict = {
+                "url": server_config.url,
+                "name": server_config.name,
+                "oauth": True,
+            }
+
+            # Perform OAuth authentication
+            console.print("🌐 Opening browser for OAuth authentication...")
+            async with client_manager._get_connection_context(server_config_dict):
+                # OAuth flow completed successfully
+                console.print("✅ OAuth authentication successful!")
+                console.print("🔑 Authentication token obtained and stored")
+
+        except Exception as e:
+            error_msg = f"OAuth authentication failed: {str(e)}"
+            console.print(f"\n[red]❌ {error_msg}[/red]")
+            console.print(
+                "[dim]Please check your OAuth configuration and try again.[/dim]"
+            )
+
+            # Return early with authentication failure
+            return {
+                "success": False,
+                "message": error_msg,
+                "total_tests": len(test_cases),
+                "successful_tests": 0,
+                "failed_tests": len(test_cases),
+                "execution_time": time.time() - start_time,
+                "results": [],
+            }
+
     # Determine test type from suite config
     test_type = (
         getattr(suite_config, "test_type", "conversation")
@@ -671,7 +715,8 @@ async def execute_test_cases(
         # Show successful tests with test names
         # Use evaluation.success if available, otherwise fall back to execution success
         successful_results = [
-            r for r in results
+            r
+            for r in results
             if r.get("evaluation", {}).get("success", r.get("success", False))
         ]
         for result in successful_results:
@@ -681,7 +726,8 @@ async def execute_test_cases(
         # Show failed tests with full reasoning (not truncated)
         # Use evaluation.success if available, otherwise fall back to execution success
         failed_tests = [
-            r for r in results
+            r
+            for r in results
             if not r.get("evaluation", {}).get("success", r.get("success", False))
         ]
         for result in failed_tests:
@@ -1642,16 +1688,28 @@ def create_provider_from_config(server_config) -> ProviderInterface:
     if not anthropic_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable is required")
 
+    # Build MCP server configuration based on authentication method
+    mcp_server_config = {
+        "url": server_config.url,
+        "name": server_config.name,
+    }
+
+    # Handle OAuth vs token authentication
+    if hasattr(server_config, "oauth") and server_config.oauth:
+        # OAuth authentication - let MCPClientManager handle the flow
+        mcp_server_config["oauth"] = True
+    elif (
+        hasattr(server_config, "authorization_token")
+        and server_config.authorization_token
+    ):
+        # Token authentication
+        mcp_server_config["authorization_token"] = server_config.authorization_token
+    # If neither is set, no authentication will be used
+
     provider_config = {
         "api_key": anthropic_key,
         "model": "claude-sonnet-4-20250514",
-        "mcp_servers": [
-            {
-                "url": server_config.url,
-                "name": server_config.name,
-                "authorization_token": server_config.authorization_token,
-            }
-        ],
+        "mcp_servers": [mcp_server_config],
     }
     return AnthropicProvider(provider_config)
 
