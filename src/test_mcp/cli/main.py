@@ -59,7 +59,7 @@ class CLIErrorHandler:
         else:
             self.console.print_error(f"Invalid {param_name}: {error_msg}")
 
-        _handle_command_completion(self.start_time, exit_code=1)
+        handle_command_completion(self.start_time, exit_code=1)
         sys.exit(1)
 
     def handle_usage_error(self, error: click.UsageError) -> None:
@@ -107,7 +107,7 @@ class CLIErrorHandler:
         else:
             self.console.print_error(str(error))
 
-        _handle_command_completion(self.start_time, exit_code=1)
+        handle_command_completion(self.start_time, exit_code=1)
         sys.exit(1)
 
     def handle_system_exit(self, error: SystemExit) -> None:
@@ -120,7 +120,7 @@ class CLIErrorHandler:
                 exit_code = int(exit_code)
             except ValueError:
                 exit_code = 1
-        _handle_command_completion(self.start_time, exit_code=exit_code)
+        handle_command_completion(self.start_time, exit_code=exit_code)
         raise
 
 
@@ -171,6 +171,27 @@ def show_help(ctx, param, value):
                 ctx.exit()
 
 
+def handle_command_completion(start_time: float, exit_code: int) -> None:
+    """Track command completion and show suggestions"""
+    try:
+        # Track command for analytics
+        duration_ms = (time.time() - start_time) * 1000
+        command_name = " ".join(sys.argv) if sys.argv else "mcp-t"
+
+        command_tracker = get_command_tracker()
+        command_tracker.record_command(command_name, exit_code, duration_ms)
+
+        # Show suggestions for all commands (not just failures)
+        # Skip for help commands and version commands
+        if not any(flag in sys.argv for flag in ["--help", "-h", "--version"]):
+            ctx = click.get_current_context(silent=True)
+            if ctx and hasattr(ctx, "obj") and ctx.obj:
+                trigger_post_command_hooks(ctx)
+    except Exception as e:
+        console = get_console()
+        console.print_error(f"Unexpected error: {e!s}")
+
+
 @click.group(
     invoke_without_command=True,
     name="mcp-t",
@@ -216,52 +237,23 @@ def mcpt_main() -> None:
 
     try:
         mcpt_cli(standalone_mode=False)
-        _handle_command_completion(start_time, exit_code=0)
+        handle_command_completion(start_time, exit_code=0)
     except click.BadParameter as e:
         error_handler.handle_bad_parameter(e)
     except click.UsageError as e:
         error_handler.handle_usage_error(e)
     except SystemExit as e:
         error_handler.handle_system_exit(e)
-    except click.Abort:
-        # Handle user interruption (Ctrl+C) - Click converts KeyboardInterrupt to Abort
+    except (click.Abort, KeyboardInterrupt):
         console = get_console()
         console.print("\n[dim]Operation cancelled by user[/dim]")
-        _handle_command_completion(start_time, exit_code=130)
-        sys.exit(130)
-    except KeyboardInterrupt:
-        # Handle user interruption (fallback, though Click usually catches this first)
-        console = get_console()
-        console.print("\n[dim]Operation cancelled by user[/dim]")
-        _handle_command_completion(start_time, exit_code=130)
+        handle_command_completion(start_time, exit_code=130)
         sys.exit(130)
     except Exception as e:
-        # Only for truly unexpected errors
-        _handle_command_completion(start_time, exit_code=1)
+        handle_command_completion(start_time, exit_code=1)
         console = get_console()
         console.print(f"[red]Unexpected error: {e}[/red]")
         raise
-
-
-def _handle_command_completion(start_time: float, exit_code: int) -> None:
-    """Track command completion and show suggestions"""
-    try:
-        # Track command for analytics
-        duration_ms = (time.time() - start_time) * 1000
-        command_name = " ".join(sys.argv) if sys.argv else "mcp-t"
-
-        command_tracker = get_command_tracker()
-        command_tracker.record_command(command_name, exit_code, duration_ms)
-
-        # Show suggestions for all commands (not just failures)
-        # Skip for help commands and version commands
-        if not any(flag in sys.argv for flag in ["--help", "-h", "--version"]):
-            ctx = click.get_current_context(silent=True)
-            if ctx and hasattr(ctx, "obj") and ctx.obj:
-                trigger_post_command_hooks(ctx)
-    except Exception:
-        # Silent failure - don't break CLI for tracking/suggestion issues
-        pass
 
 
 # Register all commands from modules

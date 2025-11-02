@@ -1,1 +1,0 @@
-# Golf Test Utils Package
