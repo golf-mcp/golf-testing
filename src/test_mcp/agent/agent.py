@@ -194,14 +194,14 @@ class ClaudeAgent:
                     total_tokens = (
                         response.usage.input_tokens + response.usage.output_tokens
                     )
-                    self.rate_limiter.record_token_usage(correlation_id, total_tokens)
+                    await self.rate_limiter.record_token_usage(correlation_id, total_tokens)
 
                 return response
 
             except Exception as e:
                 # Clean up pending request on error
                 if self.rate_limiter and correlation_id:
-                    self.rate_limiter.cleanup_pending_request(correlation_id)
+                    await self.rate_limiter.cleanup_pending_request(correlation_id)
 
                 # Check if this is the last attempt
                 if attempt == max_retries:
