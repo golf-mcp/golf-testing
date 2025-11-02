@@ -89,7 +89,9 @@ def suggest_config_corrections(
         if len(available_ids) > 5:
             console.print(f"  ... and {len(available_ids) - 5} more")
         console.print_info(f"Use 'mcp-t list {config_type}s' to see all options")
-        console.print_info(f"Use 'mcp-t create {config_type}' to create new configurations")
+        console.print_info(
+            f"Use 'mcp-t create {config_type}' to create new configurations"
+        )
 
     return len(suggestions) > 0
 

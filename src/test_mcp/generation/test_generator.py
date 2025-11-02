@@ -91,7 +91,9 @@ class TestGenerator:
             ratio = MAX_NON_INTEGRATION_TESTS / total_tests
 
             tool_limit = max(1, int(len(tool_tests) * ratio)) if tool_tests else 0
-            resource_limit = max(1, int(len(resource_tests) * ratio)) if resource_tests else 0
+            resource_limit = (
+                max(1, int(len(resource_tests) * ratio)) if resource_tests else 0
+            )
             prompt_limit = max(1, int(len(prompt_tests) * ratio)) if prompt_tests else 0
 
             # Adjust if we're still over the limit
@@ -99,11 +101,11 @@ class TestGenerator:
             if current_total > MAX_NON_INTEGRATION_TESTS:
                 # Trim from the largest category
                 if tool_limit >= resource_limit and tool_limit >= prompt_limit:
-                    tool_limit -= (current_total - MAX_NON_INTEGRATION_TESTS)
+                    tool_limit -= current_total - MAX_NON_INTEGRATION_TESTS
                 elif resource_limit >= prompt_limit:
-                    resource_limit -= (current_total - MAX_NON_INTEGRATION_TESTS)
+                    resource_limit -= current_total - MAX_NON_INTEGRATION_TESTS
                 else:
-                    prompt_limit -= (current_total - MAX_NON_INTEGRATION_TESTS)
+                    prompt_limit -= current_total - MAX_NON_INTEGRATION_TESTS
 
             tool_tests = tool_tests[:tool_limit]
             resource_tests = resource_tests[:resource_limit]
@@ -265,9 +267,13 @@ CRITICAL: success_criteria must be a single string, NOT an array of strings. Com
             "complex workflow combining tools and resources",
             "error recovery across multiple operations",
             "state management in multi-step process",
-            "end-to-end realistic user scenario"
+            "end-to-end realistic user scenario",
         ]
-        focus = focus_options[variant - 1] if variant <= len(focus_options) else focus_options[0]
+        focus = (
+            focus_options[variant - 1]
+            if variant <= len(focus_options)
+            else focus_options[0]
+        )
         return f"Integration test #{variant}: {focus}, 2+ tools/resources, multi-step scenario, 8-12 turns"
 
     async def _generate_single_test(

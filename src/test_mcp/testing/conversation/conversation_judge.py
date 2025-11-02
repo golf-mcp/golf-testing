@@ -183,7 +183,9 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
             judge_eval = JudgeEvaluation(
                 overall_score=max(0.0, min(10.0, overall_score * 10)),  # Scale to 0-10
                 criteria_scores=criteria_scores,
-                reasoning=evaluation_data.get("reasoning", "No reasoning provided by judge"),
+                reasoning=evaluation_data.get(
+                    "reasoning", "No reasoning provided by judge"
+                ),
                 success=success,
             )
 
