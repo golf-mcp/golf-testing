@@ -19,8 +19,8 @@ class RateLimiter:
     def __init__(self) -> None:
         # Updated to realistic API limits (conservative defaults for reliable operation)
         self.providers = {
-            "anthropic": {"requests_per_minute": 500, "tokens_per_minute": 100000},
-            "openai": {"requests_per_minute": 500, "tokens_per_minute": 100000},
+            "anthropic": {"requests_per_minute": 5000, "tokens_per_minute": 100000},
+            "openai": {"requests_per_minute": 5000, "tokens_per_minute": 100000},
             "gemini": {"requests_per_minute": 60, "tokens_per_minute": 8000},
         }
         self.request_history: dict[str, deque] = defaultdict(deque)

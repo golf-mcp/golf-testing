@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class TestStatus(str, Enum):
+class ExecutionStatus(str, Enum):
     """Unified test status across all test types"""
 
     QUEUED = "queued"
@@ -17,7 +17,7 @@ class TestStatus(str, Enum):
     SKIPPED = "skipped"
 
 
-class TestType(str, Enum):
+class SuiteCategory(str, Enum):
     """Test type enumeration"""
 
     CONVERSATION = "conversation"
@@ -42,10 +42,10 @@ class BaseTestResult(BaseModel, ABC):
 
     # Core identification
     test_id: str = Field(..., description="Unique test identifier")
-    test_type: TestType = Field(..., description="Type of test")
+    test_type: SuiteCategory = Field(..., description="Type of test")
 
     # Execution status
-    status: TestStatus = Field(..., description="Test execution status")
+    status: ExecutionStatus = Field(..., description="Test execution status")
     success: bool = Field(..., description="Whether test passed")
 
     # Timing information
@@ -96,8 +96,8 @@ class JudgeEvaluation(BaseModel):
 class ConversationTestResult(BaseTestResult):
     """Result model for conversation tests (extends BaseTestResult)"""
 
-    test_type: TestType = Field(
-        default=TestType.CONVERSATION, description="Test type identifier"
+    test_type: SuiteCategory = Field(
+        default=SuiteCategory.CONVERSATION, description="Test type identifier"
     )
 
     # Conversation-specific data

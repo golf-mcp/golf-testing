@@ -42,6 +42,20 @@ class MCPServerConfig(BaseModel):
     )
     oauth: bool = Field(default=False, description="Enable OAuth authentication")
 
+    # Timeout configuration
+    tool_timeout: int = Field(
+        default=60,
+        description="Timeout in seconds for individual tool executions (default: 60)",
+        ge=1,  # Greater than or equal to 1 second
+        le=600,  # Less than or equal to 10 minutes
+    )
+    connection_timeout: int = Field(
+        default=30,
+        description="Timeout in seconds for establishing connection (default: 30)",
+        ge=1,
+        le=120,
+    )
+
     def model_post_init(self, __context):
         """Validate transport-specific requirements"""
         if self.transport == "http":

@@ -236,9 +236,12 @@ def run_generation_wizard(console) -> GenerationRequest | None:
     # Step 1b: Test Suite Name/ID
     console.console.print("\n[bold cyan]Step 1b: Test Suite Name/ID[/bold cyan]\n")
 
-    # Generate default suite_id with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    default_suite_id = f"{server_id}-generated-{timestamp}"
+    # Generate default suite_id with timestamp and collision safety
+    import uuid
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]  # Include milliseconds
+    unique_id = uuid.uuid4().hex[:8]
+    default_suite_id = f"{server_id}-generated-{timestamp}-{unique_id}"
 
     console.console.print(
         "[dim]This will be used as the suite ID, name, and filename (without .json)[/dim]"

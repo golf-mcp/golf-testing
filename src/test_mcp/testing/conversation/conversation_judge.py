@@ -148,7 +148,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
             evaluation_data, _raw_response = (
                 self.openai_client.create_completion_with_json_parsing(
                     messages=messages,
-                    max_tokens=1200,  # More tokens for conversation analysis
+                    max_tokens=50000,
                     temperature=0.1,
                     fallback_data=fallback_data,
                 )
@@ -183,7 +183,7 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
             judge_eval = JudgeEvaluation(
                 overall_score=max(0.0, min(10.0, overall_score * 10)),  # Scale to 0-10
                 criteria_scores=criteria_scores,
-                reasoning=evaluation_data["reasoning"],
+                reasoning=evaluation_data.get("reasoning", "No reasoning provided by judge"),
                 success=success,
             )
 
@@ -207,27 +207,168 @@ Respond with ONLY the JSON object, no additional text. Ensure it's valid JSON th
                 success=False,
             )
 
-    def evaluate_conversations_batch(
-        self, conversations: list[ConversationResult]
+    async def evaluate_conversations_parallel(
+        self, conversations: list[ConversationResult], max_concurrency: int = 5
     ) -> list[JudgeEvaluation]:
-        """Evaluate multiple conversations"""
-        evaluations = []
+        """Evaluate multiple conversations in parallel with controlled concurrency
 
-        for i, conversation in enumerate(conversations, 1):
-            print(
-                f"Evaluating conversation {i}/{len(conversations)}: {conversation.test_case.test_id}"
+        Args:
+            conversations: List of conversation results to evaluate
+            max_concurrency: Maximum concurrent evaluations (default: 5)
+
+        Returns:
+            List of judge evaluations in same order as input conversations
+        """
+        import asyncio
+
+        # Semaphore to control concurrency
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def evaluate_one(conversation: ConversationResult, index: int):
+            """Evaluate single conversation with concurrency control"""
+            async with semaphore:
+                print(
+                    f"Evaluating conversation {index + 1}/{len(conversations)}: "
+                    f"{conversation.test_case.test_id}"
+                )
+
+                # Run synchronous evaluation in executor to avoid blocking
+                loop = asyncio.get_event_loop()
+                evaluation = await loop.run_in_executor(
+                    None, self.evaluate_conversation, conversation
+                )
+
+                # Print quick result
+                result_symbol = "✅" if evaluation.success else "❌"
+                result_text = "pass" if evaluation.success else "fail"
+                confidence = evaluation.criteria_scores.get("confidence", 0.0)
+                goal_achieved = (
+                    evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                )
+
+                print(
+                    f"   {result_symbol} {result_text} (confidence: {confidence:.2f})"
+                )
+                print(f"   Goal achieved: {'Yes' if goal_achieved else 'No'}")
+
+                return evaluation
+
+        # Execute evaluations in parallel
+        tasks = [evaluate_one(conv, i) for i, conv in enumerate(conversations)]
+
+        evaluations = await asyncio.gather(*tasks)
+        return list(evaluations)
+
+    async def evaluate_conversations_batch_async(
+        self,
+        conversations: list[ConversationResult],
+        parallel: bool = True,
+        max_concurrency: int = 5,
+    ) -> list[JudgeEvaluation]:
+        """Evaluate multiple conversations (sequential or parallel) - async version
+
+        Args:
+            conversations: List of conversation results to evaluate
+            parallel: If True, use parallel evaluation (default: True)
+            max_concurrency: Maximum concurrent evaluations when parallel=True
+
+        Returns:
+            List of judge evaluations in same order as input
+        """
+        if parallel:
+            # Use parallel evaluation
+            return await self.evaluate_conversations_parallel(
+                conversations, max_concurrency
             )
+        else:
+            # Keep existing sequential implementation for backward compatibility
+            evaluations = []
+            for i, conversation in enumerate(conversations, 1):
+                print(
+                    f"Evaluating conversation {i}/{len(conversations)}: "
+                    f"{conversation.test_case.test_id}"
+                )
 
-            evaluation = self.evaluate_conversation(conversation)
-            evaluations.append(evaluation)
+                evaluation = self.evaluate_conversation(conversation)
+                evaluations.append(evaluation)
 
-            # Print quick result
-            result_symbol = "✅" if evaluation.success else "❌"
-            result_text = "pass" if evaluation.success else "fail"
-            confidence = evaluation.criteria_scores.get("confidence", 0.0)
-            goal_achieved = evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                # Print quick result
+                result_symbol = "✅" if evaluation.success else "❌"
+                result_text = "pass" if evaluation.success else "fail"
+                confidence = evaluation.criteria_scores.get("confidence", 0.0)
+                goal_achieved = (
+                    evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                )
 
-            print(f"   {result_symbol} {result_text} (confidence: {confidence:.2f})")
-            print(f"   Goal achieved: {'Yes' if goal_achieved else 'No'}")
+                print(
+                    f"   {result_symbol} {result_text} (confidence: {confidence:.2f})"
+                )
+                print(f"   Goal achieved: {'Yes' if goal_achieved else 'No'}")
 
-        return evaluations
+            return evaluations
+
+    def evaluate_conversations_batch(
+        self,
+        conversations: list[ConversationResult],
+        parallel: bool = True,
+        max_concurrency: int = 5,
+    ) -> list[JudgeEvaluation]:
+        """Evaluate multiple conversations (sequential or parallel) - sync wrapper
+
+        Args:
+            conversations: List of conversation results to evaluate
+            parallel: If True, use parallel evaluation (default: True)
+            max_concurrency: Maximum concurrent evaluations when parallel=True
+
+        Returns:
+            List of judge evaluations in same order as input
+
+        Note:
+            This is a synchronous wrapper for backward compatibility.
+            Use evaluate_conversations_batch_async() when already in async context.
+        """
+        if parallel:
+            # Use parallel evaluation
+            import asyncio
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If event loop is already running, raise an error with helpful message
+                    raise RuntimeError(
+                        "Cannot use evaluate_conversations_batch() from async context. "
+                        "Use evaluate_conversations_batch_async() instead."
+                    )
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            return loop.run_until_complete(
+                self.evaluate_conversations_parallel(conversations, max_concurrency)
+            )
+        else:
+            # Keep existing sequential implementation for backward compatibility
+            evaluations = []
+            for i, conversation in enumerate(conversations, 1):
+                print(
+                    f"Evaluating conversation {i}/{len(conversations)}: "
+                    f"{conversation.test_case.test_id}"
+                )
+
+                evaluation = self.evaluate_conversation(conversation)
+                evaluations.append(evaluation)
+
+                # Print quick result
+                result_symbol = "✅" if evaluation.success else "❌"
+                result_text = "pass" if evaluation.success else "fail"
+                confidence = evaluation.criteria_scores.get("confidence", 0.0)
+                goal_achieved = (
+                    evaluation.criteria_scores.get("goal_achieved", 0.0) > 0.5
+                )
+
+                print(
+                    f"   {result_symbol} {result_text} (confidence: {confidence:.2f})"
+                )
+                print(f"   Goal achieved: {'Yes' if goal_achieved else 'No'}")
+
+            return evaluations

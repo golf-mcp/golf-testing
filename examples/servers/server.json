@@ -1,4 +1,6 @@
 {
   "url": "https://no-auth-server.courier-mcp.authed-qukc4.ryvn.run/mcp/",
-  "name": "hackernews_mcp_server"
+  "name": "hackernews_mcp_server",
+  "tool_timeout": 90,
+  "connection_timeout": 30
 }

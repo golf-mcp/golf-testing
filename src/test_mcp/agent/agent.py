@@ -491,15 +491,57 @@ class ClaudeAgent:
 
     async def cleanup(self):
         """Clean up MCP connections in task-safe manner"""
+        import sys
+
         try:
             # Try graceful cleanup first
             await self.mcp_client.disconnect_all()
-        except RuntimeError as e:
-            if "cancel scope" in str(e) or "different task" in str(e):
+        except (RuntimeError, GeneratorExit) as e:
+            error_msg = str(e)
+            if (
+                "cancel scope" in error_msg
+                or "different task" in error_msg
+                or "athrow" in error_msg
+            ):
                 # Handle AnyIO task context mismatch - use forced cleanup
+                print(
+                    f"⚠️  Agent cleanup: Task-scope violation detected, using forced cleanup",
+                    file=sys.stderr,
+                )
                 self._force_cleanup_connections()
             else:
-                raise
+                # Unexpected RuntimeError - log and use forced cleanup as fallback
+                print(
+                    f"⚠️  Agent cleanup error ({type(e).__name__}): {error_msg}, using forced cleanup",
+                    file=sys.stderr,
+                )
+                self._force_cleanup_connections()
+        except asyncio.CancelledError:
+            # Task was cancelled - force cleanup
+            print(
+                f"⚠️  Agent cleanup cancelled, using forced cleanup",
+                file=sys.stderr,
+            )
+            self._force_cleanup_connections()
+        except Exception as e:
+            # Catch connection timeouts and other errors during cleanup
+            error_msg = str(e)
+            error_type = type(e).__name__
+
+            # Check for timeout errors
+            if "timeout" in error_msg.lower() or "Timeout" in error_type:
+                print(
+                    f"⚠️  Agent cleanup timeout ({error_type}), using forced cleanup",
+                    file=sys.stderr,
+                )
+                self._force_cleanup_connections()
+            else:
+                # Log unexpected errors and attempt forced cleanup
+                print(
+                    f"⚠️  Agent cleanup error ({error_type}): {error_msg}, using forced cleanup",
+                    file=sys.stderr,
+                )
+                self._force_cleanup_connections()
 
     def _force_cleanup_connections(self):
         """Force cleanup without awaiting AsyncExitStack.aclose()"""

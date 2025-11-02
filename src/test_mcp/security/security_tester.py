@@ -1,15 +1,15 @@
 import asyncio
 import re
 from contextlib import AsyncExitStack
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from ..shared.progress_tracker import ProgressTracker, TestStatus
-from ..shared.result_models import BaseTestResult, ErrorType, TestType
+from ..shared.progress_tracker import ProgressTracker, ExecutionStatus
+from ..shared.result_models import BaseTestResult, ErrorType, SuiteCategory
 
 # MCP SDK imports with graceful fallback
 try:
@@ -45,8 +45,8 @@ class SecurityCategory(str, Enum):
 class SecurityTestResult(BaseTestResult):
     """Result of security test execution (extends BaseTestResult)"""
 
-    test_type: TestType = Field(
-        default=TestType.SECURITY, description="Test type identifier"
+    test_type: SuiteCategory = Field(
+        default=SuiteCategory.SECURITY, description="Test type identifier"
     )
 
     # Security-specific fields
@@ -195,7 +195,7 @@ class MCPSecurityTester:
         header = {"alg": "none", "typ": "JWT"}
 
         # Create payload with expired timestamp
-        expired_time = datetime.utcnow() - timedelta(hours=1)
+        expired_time = datetime.now(timezone.utc) - timedelta(hours=1)
         payload = {
             "iss": "test-issuer",
             "sub": "test-user",
@@ -223,12 +223,12 @@ class MCPSecurityTester:
         header = {"alg": "none", "typ": "JWT"}
 
         # Create payload with scopes
-        future_time = datetime.utcnow() + timedelta(hours=1)
+        future_time = datetime.now(timezone.utc) + timedelta(hours=1)
         payload = {
             "iss": "test-issuer",
             "sub": "test-user",
             "exp": int(future_time.timestamp()),
-            "iat": int(datetime.utcnow().timestamp()),
+            "iat": int(datetime.now(timezone.utc).timestamp()),
             "scope": " ".join(scopes) if scopes else "",
         }
 
@@ -324,13 +324,13 @@ class MCPSecurityTester:
             # Create error result
             error_result = SecurityTestResult(
                 test_id=str(uuid4()),
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INPUT_VALIDATION,
                 name="MCP Connection",
                 start_time=datetime.now(),
                 end_time=datetime.now(),
                 duration=0,
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -463,7 +463,7 @@ class MCPSecurityTester:
                 start_time=datetime.now(),
                 end_time=datetime.now(),
                 duration=0.0,
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 severity="high",
                 vulnerability_detected=False,
@@ -525,7 +525,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.DOS_PROTECTION,
                 name="Large Input Handling (MCP)",
                 severity="medium" if vulnerability_detected else "low",
@@ -535,7 +535,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -543,13 +543,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.DOS_PROTECTION,
                 name="Large Input Handling (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -615,7 +615,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INPUT_VALIDATION,
                 name="Malformed Input Handling (MCP)",
                 severity="medium" if vulnerability_detected else "low",
@@ -625,7 +625,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -633,13 +633,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INPUT_VALIDATION,
                 name="Malformed Input Handling (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -706,7 +706,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INPUT_VALIDATION,
                 name="Special Character Handling (MCP)",
                 severity="medium" if vulnerability_detected else "low",
@@ -716,7 +716,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -724,13 +724,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INPUT_VALIDATION,
                 name="Special Character Handling (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -775,7 +775,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.AUTH_BYPASS,
                 name="OAuth Token Validation (MCP)",
                 severity="critical" if vulnerability_detected else "low",
@@ -785,7 +785,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -793,13 +793,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.AUTH_BYPASS,
                 name="OAuth Token Validation (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -850,7 +850,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.AUTH_BYPASS,
                 name="OAuth Scope Enforcement (MCP)",
                 severity="high" if vulnerability_detected else "low",
@@ -860,7 +860,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -868,13 +868,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.AUTH_BYPASS,
                 name="OAuth Scope Enforcement (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -923,7 +923,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.AUTHENTICATION_BYPASS,
                 name="MCP Capability Bypass",
                 severity="high" if vulnerability_detected else "low",
@@ -933,7 +933,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -942,13 +942,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.AUTHENTICATION_BYPASS,
                 name="MCP Capability Bypass",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -1014,7 +1014,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INJECTION_ATTACKS,
                 name="Tool Schema Validation",
                 severity="critical" if vulnerability_detected else "low",
@@ -1024,7 +1024,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -1032,13 +1032,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INJECTION_ATTACKS,
                 name="Tool Schema Validation",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -1101,7 +1101,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.MCP_PROMPT_INJECTION,
                 name="MCP Prompt Injection (MCP)",
                 severity="high" if vulnerability_detected else "low",
@@ -1111,7 +1111,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -1119,13 +1119,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.MCP_PROMPT_INJECTION,
                 name="MCP Prompt Injection (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -1218,7 +1218,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.MCP_DATA_LEAKAGE,
                 name="MCP Data Leakage Detection (MCP)",
                 severity="high" if vulnerability_detected else "low",
@@ -1228,7 +1228,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -1236,13 +1236,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.MCP_DATA_LEAKAGE,
                 name="MCP Data Leakage Detection (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -1311,7 +1311,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INJECTION_ATTACKS,
                 name="SQL Injection (MCP)",
                 severity="critical" if vulnerability_detected else "low",
@@ -1321,7 +1321,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -1329,13 +1329,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INJECTION_ATTACKS,
                 name="SQL Injection (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,
@@ -1406,7 +1406,7 @@ class MCPSecurityTester:
 
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INJECTION_ATTACKS,
                 name="Command Injection (MCP)",
                 severity="critical" if vulnerability_detected else "low",
@@ -1416,7 +1416,7 @@ class MCPSecurityTester:
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.COMPLETED,
+                status=ExecutionStatus.COMPLETED,
                 success=not vulnerability_detected,
             )
 
@@ -1424,13 +1424,13 @@ class MCPSecurityTester:
             end_time = datetime.now()
             return SecurityTestResult(
                 test_id=test_id,
-                test_type=TestType.SECURITY,
+                test_type=SuiteCategory.SECURITY,
                 category=SecurityCategory.INJECTION_ATTACKS,
                 name="Command Injection (MCP)",
                 start_time=start_time,
                 end_time=end_time,
                 duration=(end_time - start_time).total_seconds(),
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 vulnerability_detected=False,

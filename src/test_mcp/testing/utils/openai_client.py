@@ -45,8 +45,8 @@ class OpenAIClientWrapper:
             "max_completion_tokens": max_tokens,
         }
 
-        # Only add temperature for non-o3 models (o3 models only support default temperature)
-        if not self.model.startswith("o3"):
+        # Only add temperature for models that support it (o3 and gpt-5 only support default temperature)
+        if not self.model.startswith("o3") and not self.model.startswith("gpt-5"):
             api_params["temperature"] = temperature
 
         # Enable JSON mode for structured responses

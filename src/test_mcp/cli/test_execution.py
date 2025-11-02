@@ -47,6 +47,247 @@ from .utils import (
 )
 
 
+def should_enable_judge_evaluation(suite_type: str, parallelism: int) -> bool:
+    """Determine if judge evaluation should run based on suite type
+
+    Args:
+        suite_type: Type of test suite (conversational, security, compliance)
+        parallelism: Parallelism setting for the suite
+
+    Returns:
+        bool: True if judge evaluation should be enabled
+
+    Rules:
+        - Conversational tests: Always get judge evaluation (regardless of parallelism)
+        - Security tests: Never get judge evaluation
+        - Compliance tests: Never get judge evaluation
+        - Other types: Default behavior (parallelism > 1)
+    """
+    if suite_type == "conversational":
+        return True  # Always judge conversational tests
+    elif suite_type in ["security", "compliance"]:
+        return False  # Never judge security/compliance tests
+    else:
+        return parallelism > 1  # Default behavior for other types
+
+
+async def evaluate_results_with_judge(
+    results: list[dict],
+    suite_type: str,
+    parallelism: int,
+    console,
+    verbose: bool = False,
+) -> list[dict]:
+    """Unified judge evaluation for both parallel and sequential paths
+
+    Args:
+        results: List of test results (normalized format)
+        suite_type: Type of test suite
+        parallelism: Parallelism setting (used for judge concurrency)
+        console: Console for output
+        verbose: Verbose output flag
+
+    Returns:
+        Results with evaluation fields added (modifies in place)
+    """
+    judge_enabled = should_enable_judge_evaluation(suite_type, parallelism)
+
+    if not judge_enabled:
+        return results
+
+    try:
+        judge = ConversationJudge()
+
+        # Extract all conversation results for batch evaluation
+        conversations = []
+        result_indices = []  # Track which results get evaluated
+
+        for i, result in enumerate(results):
+            # Extract conversation result (handles both formats)
+            conversation_result = (
+                result.get("result_obj")  # Parallel format
+                or result.get("details", {}).get(
+                    "conversation_result"
+                )  # Sequential format
+            )
+
+            if result.get("status") == "completed" and conversation_result:
+                conversations.append(conversation_result)
+                result_indices.append(i)
+
+        # Perform batch evaluation with progress tracking
+        if conversations:
+            # Create progress tracker for evaluations
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                SpinnerColumn,
+                TextColumn,
+                TimeElapsedColumn,
+            )
+
+            eval_progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                console=console.console,
+            )
+
+            eval_task = eval_progress.add_task(
+                f"Running {len(conversations)} evaluations (max {parallelism} parallel)",
+                total=len(conversations),
+            )
+
+            from rich.live import Live
+
+            # Track completed evaluations
+            completed_evals = 0
+            evaluations = []
+
+            # Run evaluation with progress updates
+            with Live(eval_progress, console=console.console, refresh_per_second=2):
+                import asyncio
+
+                semaphore = asyncio.Semaphore(parallelism)
+
+                async def evaluate_one(conv, idx):
+                    nonlocal completed_evals
+                    async with semaphore:
+                        loop = asyncio.get_event_loop()
+                        evaluation = await loop.run_in_executor(
+                            None, judge.evaluate_conversation, conv
+                        )
+                        completed_evals += 1
+                        eval_progress.update(eval_task, completed=completed_evals)
+                        return evaluation
+
+                tasks = [evaluate_one(conv, i) for i, conv in enumerate(conversations)]
+                evaluations = await asyncio.gather(*tasks)
+
+            # Map evaluations back to results
+            for idx, eval_result in zip(result_indices, evaluations, strict=True):
+                results[idx]["evaluation"] = eval_result.model_dump()
+
+                if verbose:
+                    console.print(
+                        f"  {'✅' if eval_result.success else '❌'} "
+                        f"{results[idx].get('test_id')}: "
+                        f"{'PASSED' if eval_result.success else 'FAILED'}"
+                    )
+
+    except Exception as e:
+        console.print(f"[yellow]Judge evaluation initialization failed: {e!s}[/yellow]")
+
+    return results
+
+
+def count_successful_tests(
+    results: list[dict], suite_type: str, parallelism: int
+) -> int:
+    """Count successful tests using unified logic
+
+    Uses judge evaluation if enabled, otherwise uses execution success.
+    """
+    judge_enabled = should_enable_judge_evaluation(suite_type, parallelism)
+
+    if judge_enabled:
+        # Use judge evaluation for success
+        return len(
+            [r for r in results if r.get("evaluation", {}).get("success", False)]
+        )
+    else:
+        # Use execution success
+        return len([r for r in results if r.get("success", False)])
+
+
+def normalize_parallel_result(parallel_result: dict) -> dict:
+    """Transform parallel result format to sequential-compatible format
+
+    Args:
+        parallel_result: Result dict from run_tests_parallel()
+
+    Returns:
+        Result dict compatible with sequential execution format
+
+    This ensures both execution paths produce identical result structures
+    for downstream consumers (judge evaluation, result processing, etc.)
+    """
+    # Extract core fields from parallel format
+    test_case = parallel_result.get("test_case", {})
+    result = parallel_result.get("result", {})
+    result_obj = parallel_result.get("result_obj")
+    status = parallel_result.get("status")
+    error = parallel_result.get("error")
+
+    # Handle error case
+    if error or status == "failed":
+        return {
+            "test_id": test_case.get("test_id", "unknown"),
+            "success": False,
+            "message": f"Test execution failed: {error}",
+            "execution_time": 0.0,
+            "error": error or "Unknown error",
+            # Preserve parallel fields for backward compatibility
+            "status": status,
+            "test_case": test_case,
+            "result": result,
+            "result_obj": result_obj,
+        }
+
+    # Determine success (same logic as execute_standard_test_flow line 1223-1231)
+    # Note: result_obj might be a dict (serialized) or object, handle both
+    if result_obj:
+        if isinstance(result_obj, dict):
+            result_obj_status = result_obj.get("status", "")
+        else:
+            result_obj_status = (
+                result_obj.status.value
+                if hasattr(result_obj.status, "value")
+                else str(result_obj.status)
+            )
+    else:
+        result_obj_status = ""
+
+    # Extract actual success from conversation result
+    # Check both execution success and status
+    execution_success = result.get("success", False)
+    status_achieved = result_obj_status in ["goal_achieved", "GOAL_ACHIEVED"]
+
+    success = (
+        status == "completed"
+        and result_obj
+        and (execution_success or status_achieved)  # Either indicator
+    )
+
+    # Extract timing
+    duration = result.get("duration", 0.0)
+    turns_count = len(result.get("turns", []))
+
+    # Build sequential-compatible format
+    normalized = {
+        # Sequential format fields
+        "test_id": test_case.get("test_id", "unknown"),
+        "success": success,
+        "message": f"Conversation completed with {turns_count} turns",
+        "execution_time": duration,
+        "details": {
+            "success": result.get("success", False),
+            "response_time": duration,
+            "message": f"Conversation completed with {turns_count} turns",
+            "conversation_result": result_obj,  # Sequential expects this key
+        },
+        # Preserve parallel format fields for backward compatibility
+        "status": status,
+        "result_obj": result_obj,  # Keep for judge evaluation
+        "result": result,
+        "test_case": test_case,
+    }
+
+    return normalized
+
+
 def _print_output_files(run_file, eval_file=None) -> None:
     """Print output file paths in consistent format"""
     console = get_console()
@@ -56,9 +297,6 @@ def _print_output_files(run_file, eval_file=None) -> None:
     md_file = run_file.with_suffix(".md")
     if md_file.exists():
         console.print(f"  MD: {md_file}")
-
-    if eval_file:
-        console.print(f"  Evaluations: {eval_file}")
 
 
 class TestRunConfiguration(BaseModel):
@@ -77,17 +315,44 @@ class TestRunConfiguration(BaseModel):
 
 
 async def run_tests_parallel(
-    test_suite, provider, max_parallelism=5, rate_limiter=None, suite_metrics=None
+    test_suite,
+    provider,
+    max_parallelism=5,
+    rate_limiter=None,
+    suite_metrics=None,
+    progress_tracker=None,
 ):
-    """Run tests concurrently using provider interface"""
+    """Run tests concurrently using provider interface
+
+    Args:
+        test_suite: Test suite configuration with test cases
+        provider: Provider interface for test execution
+        max_parallelism: Maximum concurrent tests (default: 5)
+        rate_limiter: Optional rate limiter for API calls
+        suite_metrics: Optional suite metrics for performance tracking
+        progress_tracker: Optional progress tracker for real-time updates
+    """
 
     # Semaphore for controlling parallelism
     semaphore = asyncio.Semaphore(max_parallelism)
 
     async def run_single_test(test_case_def, test_index):
-        async with semaphore:
-            session_id = f"test_{test_case_def.test_id}_{test_index}"
+        session_id = f"test_{test_case_def.test_id}_{test_index}"
 
+        # Create progress bar for this test with 5 realistic stages
+        if progress_tracker:
+            progress_tracker.create_test_progress_bar(
+                test_id=test_case_def.test_id,
+                test_name=test_case_def.test_id,
+                total_steps=5,
+            )
+            progress_tracker.update_test_progress_bar(
+                test_id=test_case_def.test_id,
+                status_message="Queued",
+                current_step=0,
+            )
+
+        async with semaphore:
             # Rate limiting
             if rate_limiter:
                 await rate_limiter.acquire_request_slot(provider.provider_type.value)
@@ -102,13 +367,32 @@ async def run_tests_parallel(
                 suite_metrics.test_metrics.append(test_metrics)
 
             try:
-                # Start isolated session
+                # Stage 1: Initialize agent session and connect to MCP server
+                if progress_tracker:
+                    progress_tracker.update_test_progress_bar(
+                        test_id=test_case_def.test_id,
+                        status_message="Connecting to MCP server",
+                        current_step=1,
+                    )
+
                 await provider.start_session(session_id)
 
-                # Run test using provider interface
+                # Stage 2: Multi-turn conversation with agent
+                if progress_tracker:
+                    progress_tracker.update_test_progress_bar(
+                        test_id=test_case_def.test_id,
+                        status_message="Running conversation",
+                        current_step=2,
+                    )
+
+                # Run test - this handles multi-turn conversation and tool calling
+                # progress_tracker will update to stage 3 when tools are called
                 result = await run_conversation_with_provider(
-                    provider, test_case_def, session_id
+                    provider, test_case_def, session_id, progress_tracker
                 )
+
+                # Stage 4: Process results (no action needed - happens in run_conversation_with_provider)
+                # This stage is implicit - result structure is already built
 
                 # Update performance metrics
                 if test_metrics:
@@ -134,11 +418,92 @@ async def run_tests_parallel(
                     )
                     test_metrics.success = False
                     test_metrics.error_message = str(e)
-                raise
+
+                # Mark test as failed in progress tracker
+                if progress_tracker:
+                    progress_tracker.mark_test_failed(
+                        test_id=test_case_def.test_id,
+                        error_message=str(e)[:50],
+                    )
+
+                # Store the error to return after cleanup
+                error_result = {
+                    "test_case": {
+                        "test_id": test_case_def.test_id,
+                        "user_message": test_case_def.user_message,
+                        "success_criteria": test_case_def.success_criteria,
+                        "timeout_seconds": test_case_def.timeout_seconds,
+                        "metadata": test_case_def.metadata or {},
+                    },
+                    "result": None,
+                    "error": str(e),
+                    "status": "failed",
+                }
 
             finally:
-                # Clean up session
-                await provider.end_session(session_id)
+                # Clean up session (suppress cleanup errors to avoid masking original error)
+                try:
+                    await provider.end_session(session_id)
+                except (RuntimeError, GeneratorExit) as e:
+                    # Handle task-scope violations during cleanup
+                    error_msg = str(e)
+                    if (
+                        "cancel scope" in error_msg
+                        or "different task" in error_msg
+                        or "athrow" in error_msg
+                    ):
+                        if progress_tracker:
+                            progress_tracker.update_test_status(
+                                test_id=test_case_def.test_id,
+                                status="cleanup_warning",
+                                error_message="Cleanup warning: Task-scope violation (expected in parallel execution)",
+                            )
+                    elif progress_tracker:
+                        progress_tracker.update_test_status(
+                            test_id=test_case_def.test_id,
+                            status="cleanup_warning",
+                            error_message=f"Cleanup warning: {type(e).__name__}: {error_msg}",
+                        )
+                except asyncio.CancelledError:
+                    # Task cancelled during cleanup
+                    if progress_tracker:
+                        progress_tracker.update_test_status(
+                            test_id=test_case_def.test_id,
+                            status="cleanup_warning",
+                            error_message="Cleanup warning: Cleanup cancelled",
+                        )
+                except Exception as e:
+                    # Log all other cleanup errors
+                    error_msg = str(e)
+                    error_type = type(e).__name__
+                    if progress_tracker:
+                        progress_tracker.update_test_status(
+                            test_id=test_case_def.test_id,
+                            status="cleanup_warning",
+                            error_message=f"Cleanup warning: {error_type}: {error_msg}",
+                        )
+
+                # Mark test as completed in progress tracker (Stage 5)
+                if progress_tracker and "error_result" not in locals():
+                    # Determine final status based on result
+                    success = False
+                    if "result" in locals():
+                        success = result.get("status") == "completed" and result.get(
+                            "result", {}
+                        ).get("success", False)
+
+                    progress_tracker.update_test_progress_bar(
+                        test_id=test_case_def.test_id,
+                        status_message="Completed"
+                        if success
+                        else "Completed with warnings",
+                        current_step=5,
+                        completed=True,
+                    )
+
+            # Return error result if exception occurred
+            if "error_result" in locals():
+                return error_result
 
     # Execute tests concurrently
     tasks = [
@@ -163,7 +528,6 @@ async def run_test_suite(
     auth_required = suite.auth_required  # Direct field access
 
     console = get_console()
-    console.print(f"Running {len(test_cases)} tests from suite: {suite.name}")
     console.print(f"Authentication required: {auth_required}")
 
     if verbose:
@@ -199,6 +563,50 @@ async def execute_test_cases(
     results = []
     successful_tests = 0
 
+    # Handle OAuth authentication if configured
+    if hasattr(server_config, "oauth") and server_config.oauth:
+        console.print("\n[bold yellow]🔐 OAuth Authentication Required[/bold yellow]")
+        console.print("Starting OAuth flow to authenticate with the server...")
+
+        try:
+            # Import MCPClientManager to handle OAuth
+            from test_mcp.mcp_client.client_manager import MCPClientManager
+
+            # Create client manager and perform OAuth authentication
+            client_manager = MCPClientManager()
+
+            # Convert server config to dict for MCPClientManager
+            server_config_dict = {
+                "url": server_config.url,
+                "name": server_config.name,
+                "oauth": True,
+            }
+
+            # Perform OAuth authentication
+            console.print("🌐 Opening browser for OAuth authentication...")
+            async with client_manager._get_connection_context(server_config_dict):
+                # OAuth flow completed successfully
+                console.print("✅ OAuth authentication successful!")
+                console.print("🔑 Authentication token obtained and stored")
+
+        except Exception as e:
+            error_msg = f"OAuth authentication failed: {str(e)}"
+            console.print(f"\n[red]❌ {error_msg}[/red]")
+            console.print(
+                "[dim]Please check your OAuth configuration and try again.[/dim]"
+            )
+
+            # Return early with authentication failure
+            return {
+                "success": False,
+                "message": error_msg,
+                "total_tests": len(test_cases),
+                "successful_tests": 0,
+                "failed_tests": len(test_cases),
+                "execution_time": time.time() - start_time,
+                "results": [],
+            }
+
     # Determine test type from suite config
     test_type = (
         getattr(suite_config, "test_type", "conversation")
@@ -206,15 +614,256 @@ async def execute_test_cases(
         else getattr(suite_config, "suite_type", "conversation")
     )
 
-    # Initialize progress tracker
+    # Get parallelism from suite configuration
+    parallelism = getattr(suite_config, "parallelism", 1)
+
+    # Initialize progress tracker with dynamic parallelism
     progress_tracker = ProgressTracker(
         total_tests=len(test_cases),
-        parallelism=1,  # Sequential execution for now
+        parallelism=parallelism,  # Dynamic based on suite config
         test_types=[test_type],
     )
 
     # Initialize rate limiter for API calls
     rate_limiter = RateLimiter()
+
+    # ==== PARALLEL EXECUTION PATH ====
+    # Route through parallel infrastructure when parallelism > 1
+    if parallelism > 1:
+        # Print header with test count and parallelism info
+        console.print(
+            f"\n[bold cyan]Running {len(test_cases)} test{'s' if len(test_cases) != 1 else ''} "
+            f"(max {parallelism} in parallel)[/bold cyan]\n"
+        )
+
+        # Create provider for parallel execution
+        provider = create_provider_from_config(server_config)
+
+        # Create suite metrics for performance tracking
+        suite_metrics = SuiteExecutionMetrics(
+            suite_id=suite_config.suite_id,
+            start_time=start_time,
+            parallelism_used=parallelism,
+        )
+
+        # Use Rich Live context for real-time progress updates with per-test progress bars
+        with Live(
+            progress_tracker.get_renderable_group(),
+            console=console.console,
+            refresh_per_second=4,
+        ):
+            # Execute tests in parallel using existing infrastructure
+            parallel_results = await run_tests_parallel(
+                suite_config,
+                provider,
+                max_parallelism=parallelism,
+                rate_limiter=rate_limiter,
+                suite_metrics=suite_metrics,
+                progress_tracker=progress_tracker,
+            )
+
+        # Normalize results to sequential format for compatibility
+        for r in parallel_results:
+            if isinstance(r, Exception):
+                # Handle exceptions from asyncio.gather (including CancelledError)
+                results.append(
+                    {
+                        "test_id": f"test_{len(results)}",
+                        "success": False,
+                        "message": f"Test execution failed: {type(r).__name__}: {r}",
+                        "execution_time": 0.0,
+                        "error": str(r),
+                    }
+                )
+            elif isinstance(r, dict):
+                # Only normalize if r is actually a dict result
+                results.append(normalize_parallel_result(r))
+            else:
+                # Handle unexpected result types
+                results.append(
+                    {
+                        "test_id": f"test_{len(results)}",
+                        "success": False,
+                        "message": f"Unexpected result type: {type(r).__name__}",
+                        "execution_time": 0.0,
+                        "error": f"Got {type(r).__name__} instead of dict",
+                    }
+                )
+
+        # Use unified judge evaluation
+        results = await evaluate_results_with_judge(
+            results=results,
+            suite_type=test_type,
+            parallelism=parallelism,
+            console=console,
+            verbose=verbose,
+        )
+
+        # Extract evaluations for result file
+        evaluations = [r.get("evaluation") for r in results if "evaluation" in r]
+
+        # Update successful_tests count using unified logic
+        successful_tests = count_successful_tests(results, test_type, parallelism)
+
+        # Skip to summary section (avoid sequential execution)
+        execution_time = time.time() - start_time
+        pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
+
+        # Display Results section with all tests
+        console.print("\n[bold]Results:[/bold]")
+
+        # Show successful tests with test names
+        # Use evaluation.success if available, otherwise fall back to execution success
+        successful_results = [
+            r
+            for r in results
+            if r.get("evaluation", {}).get("success", r.get("success", False))
+        ]
+        for result in successful_results:
+            test_id = result.get("test_id", "unknown")
+            console.print(f"  ✅ {test_id}")
+
+        # Show failed tests with full reasoning (not truncated)
+        # Use evaluation.success if available, otherwise fall back to execution success
+        failed_tests = [
+            r
+            for r in results
+            if not r.get("evaluation", {}).get("success", r.get("success", False))
+        ]
+        for result in failed_tests:
+            test_id = result.get("test_id", "unknown")
+            eval_data = result.get("evaluation", {})
+            reasoning = eval_data.get(
+                "reasoning", result.get("message", "Unknown error")
+            )
+            # Print full reasoning without truncation
+            console.print(f"  ❌ {test_id}: {reasoning}")
+
+        # Display Summary section
+        console.print("\n[bold]Summary:[/bold]")
+        console.print(f"  Suite: {suite_config.name}")
+        console.print(f"  Server: {server_config.name}")
+        console.print(f"  Total Tests: {len(test_cases)}")
+        console.print(f"  Passed: {successful_tests} ({pass_rate:.1f}%)")
+        console.print(f"  Failed: {len(test_cases) - successful_tests}")
+        console.print(f"  Duration: {execution_time:.2f}s")
+
+        # Generate unique run ID and save results (same as sequential path)
+        run_id = str(uuid.uuid4())
+        test_run = {
+            "run_id": run_id,
+            "timestamp": datetime.now().isoformat(),
+            "test_suite": suite_config.model_dump(),
+            "server_config": server_config.model_dump(),
+            "configuration": {
+                "verbose": verbose,
+                "test_type": test_type,
+                "use_global_dir": use_global_dir,
+            },
+            "results": results,
+            "summary": {
+                "total_tests": len(test_cases),
+                "successful_tests": successful_tests,
+                "failed_tests": len(test_cases) - successful_tests,
+            },
+        }
+
+        summary = TestRunSummary(
+            run_id=run_id,
+            suite_name=suite_config.name,
+            total_tests=len(test_cases),
+            pass_rate=successful_tests / len(test_cases) if test_cases else 0.0,
+            duration_seconds=execution_time,
+            timestamp=datetime.now(),
+        )
+
+        try:
+            run_file, eval_file = write_test_results_with_location(
+                run_id,
+                test_run,
+                evaluations,
+                summary,
+                use_global_dir,
+            )
+            _print_output_files(run_file, eval_file)
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning: Could not save results to file: {e!s}[/yellow]"
+            )
+
+        # Clean up provider sessions and connections
+        try:
+            # Clean up any remaining sessions in the provider
+            if hasattr(provider, "sessions") and provider.sessions:
+                session_ids = list(provider.sessions.keys())
+                for sid in session_ids:
+                    try:
+                        await provider.end_session(sid)
+                    except Exception:
+                        # Log but don't crash on provider cleanup errors
+                        pass
+        except (RuntimeError, GeneratorExit) as e:
+            error_msg = str(e)
+            if (
+                "cancel scope" in error_msg
+                or "different task" in error_msg
+                or "athrow" in error_msg
+            ):
+                console.print(
+                    "[dim]⚠️  Provider cleanup: Task-scope violation (expected in parallel execution)[/dim]"
+                )
+            else:
+                console.print(
+                    f"[yellow]⚠️  Provider cleanup warning: {type(e).__name__}[/yellow]"
+                )
+        except asyncio.CancelledError:
+            console.print("[dim]⚠️  Provider cleanup cancelled[/dim]")
+        except Exception as e:
+            error_type = type(e).__name__
+            if "timeout" in str(e).lower() or "Timeout" in error_type:
+                console.print("[dim]⚠️  Provider cleanup timeout[/dim]")
+            else:
+                console.print(
+                    f"[yellow]⚠️  Provider cleanup warning: {error_type}[/yellow]"
+                )
+
+        # Async token cleanup
+        try:
+            await SharedTokenStorage.clear_all_async()
+        except (RuntimeError, GeneratorExit) as e:
+            error_msg = str(e)
+            if (
+                "cancel scope" in error_msg
+                or "different task" in error_msg
+                or "athrow" in error_msg
+            ):
+                console.print(
+                    "[dim]⚠️  Token cleanup: Task-scope violation (expected)[/dim]"
+                )
+            else:
+                console.print(
+                    f"[yellow]⚠️  Token cleanup warning: {type(e).__name__}[/yellow]"
+                )
+        except asyncio.CancelledError:
+            console.print("[dim]⚠️  Token cleanup cancelled[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Token cleanup warning: {e}[/yellow]")
+
+        # Return final results
+        return {
+            "suite_id": suite_config.suite_id,
+            "total_tests": len(test_cases),
+            "successful_tests": successful_tests,
+            "test_results": results,
+            "overall_success": successful_tests == len(test_cases),
+        }
+
+    # ==== SEQUENTIAL EXECUTION PATH ====
+    # Original sequential execution for parallelism=1
+    console.print(
+        f"\n[bold cyan]Running {len(test_cases)} test{'s' if len(test_cases) != 1 else ''} "
+        f"(sequential execution)[/bold cyan]\n"
+    )
 
     # Use Rich Live context for real-time updates (same pattern as enhanced progress)
     with Live(progress_tracker.progress, console=console.console, refresh_per_second=2):
@@ -447,24 +1096,59 @@ async def execute_test_cases(
 
     # Show final summary after live display ends
     execution_time = time.time() - start_time
+
+    # Run unified judge evaluation (will only run if enabled for suite type)
+    results = await evaluate_results_with_judge(
+        results=results,
+        suite_type=test_type,
+        parallelism=parallelism,
+        console=console,
+        verbose=verbose,
+    )
+
+    # Calculate success count using unified logic
+    successful_tests = count_successful_tests(results, test_type, parallelism)
+
     pass_rate = (successful_tests / len(test_cases) * 100) if test_cases else 0.0
 
-    console.print("\n[bold]Test Execution Summary:[/bold]")
-    console.print(f"Suite: {suite_config.name}")
-    console.print(f"Server: {server_config.name}")
-    console.print(f"Total Tests: {len(test_cases)}")
-    console.print(f"Passed: {successful_tests} ({pass_rate:.1f}%)")
-    console.print(f"Failed: {len(test_cases) - successful_tests}")
-    console.print(f"Duration: {execution_time:.2f}s")
+    # Display Results section with all tests
+    console.print("\n[bold]Results:[/bold]")
 
-    # Show failed tests with details (only once)
-    failed_tests = [r for r in results if not r.get("success", True)]
-    if failed_tests:
-        console.print("\n[bold red]Failed Tests:[/bold red]")
-        for result in failed_tests:
-            test_id = result.get("test_id", "unknown")
-            error_msg = result.get("error", result.get("message", "Unknown error"))
-            console.print(f"  ❌ {test_id}: {error_msg}")
+    # Show successful tests with test names
+    # Use evaluation.success if available, otherwise fall back to execution success
+    successful_results = [
+        r
+        for r in results
+        if r.get("evaluation", {}).get("success", r.get("success", False))
+    ]
+    for result in successful_results:
+        test_id = result.get("test_id", "unknown")
+        console.print(f"  ✅ {test_id}")
+
+    # Show failed tests with full reasoning (not truncated)
+    # Use evaluation.success if available, otherwise fall back to execution success
+    failed_tests = [
+        r
+        for r in results
+        if not r.get("evaluation", {}).get("success", r.get("success", False))
+    ]
+    for result in failed_tests:
+        test_id = result.get("test_id", "unknown")
+        eval_data = result.get("evaluation", {})
+        reasoning = eval_data.get(
+            "reasoning", result.get("error", result.get("message", "Unknown error"))
+        )
+        # Print full reasoning without truncation
+        console.print(f"  ❌ {test_id}: {reasoning}")
+
+    # Display Summary section
+    console.print("\n[bold]Summary:[/bold]")
+    console.print(f"  Suite: {suite_config.name}")
+    console.print(f"  Server: {server_config.name}")
+    console.print(f"  Total Tests: {len(test_cases)}")
+    console.print(f"  Passed: {successful_tests} ({pass_rate:.1f}%)")
+    console.print(f"  Failed: {len(test_cases) - successful_tests}")
+    console.print(f"  Duration: {execution_time:.2f}s")
 
     # ========== NEW RESULT SAVING LOGIC ==========
     # Generate unique run ID
@@ -887,7 +1571,10 @@ def get_multi_provider_config_from_env(
         elif provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             if api_key:
-                provider_configs["openai"] = {"api_key": api_key, "model": "gpt-4o"}
+                provider_configs["openai"] = {
+                    "api_key": api_key,
+                    "model": "gpt-5-2025-08-07",
+                }
         elif provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if api_key:
@@ -991,38 +1678,81 @@ def create_provider_from_config(server_config) -> ProviderInterface:
     """Create appropriate provider from server configuration"""
     # For now, default to Anthropic (backward compatibility)
     # Enterprise Security plan will extend this for multi-provider support
+
+    # Load .env file if present
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     if not anthropic_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable is required")
 
+    # Build MCP server configuration based on authentication method
+    mcp_server_config = {
+        "url": server_config.url,
+        "name": server_config.name,
+    }
+
+    # Handle OAuth vs token authentication
+    if hasattr(server_config, "oauth") and server_config.oauth:
+        # OAuth authentication - let MCPClientManager handle the flow
+        mcp_server_config["oauth"] = True
+    elif (
+        hasattr(server_config, "authorization_token")
+        and server_config.authorization_token
+    ):
+        # Token authentication
+        mcp_server_config["authorization_token"] = server_config.authorization_token
+    # If neither is set, no authentication will be used
+
     provider_config = {
         "api_key": anthropic_key,
         "model": "claude-sonnet-4-20250514",
-        "mcp_servers": [
-            {
-                "url": server_config.url,
-                "name": server_config.name,
-                "authorization_token": server_config.authorization_token,
-            }
-        ],
+        "mcp_servers": [mcp_server_config],
     }
     return AnthropicProvider(provider_config)
 
 
 async def run_conversation_with_provider(
-    provider: ProviderInterface, test_case_def, session_id
+    provider: ProviderInterface, test_case_def, session_id, progress_tracker=None
 ) -> dict:
-    """Run conversation using provider interface"""
-    # This replaces the conversation manager logic with provider-based execution
-    # Maintains the same conversation flow but uses async provider interface
+    """Run conversation using provider interface with full tool tracking"""
     start_time = time.time()
 
     try:
-        # Send the user message to the provider
-        response = await provider.send_message(
+        # Send the user message to the provider with session_id for isolated execution
+        # Use the new metadata-tracking method
+        metadata = await provider.send_message_with_metadata(
             test_case_def.user_message,
             system_prompt="You are a helpful AI assistant testing MCP functionality.",
+            session_id=session_id,
         )
+
+        response = metadata["response"]
+        tools_used = metadata["tools_used"]
+        raw_messages = metadata["raw_messages"]
+
+        # Stage 3: Show conversation progress (turns and tools)
+        if progress_tracker:
+            # Count actual conversation turns (user + agent pairs)
+            turn_count = len([m for m in raw_messages if m.get("role") == "user"])
+
+            if tools_used:
+                progress_tracker.update_test_progress_bar(
+                    test_id=test_case_def.test_id,
+                    status_message=f"{turn_count} turn(s), {len(tools_used)} tool(s)",
+                    current_step=3,
+                )
+            elif turn_count > 1:
+                progress_tracker.update_test_progress_bar(
+                    test_id=test_case_def.test_id,
+                    status_message=f"{turn_count} conversation turn(s)",
+                    current_step=3,
+                )
+            else:
+                # Single turn, no tools - skip stage 3
+                pass
 
         end_time = time.time()
         duration = end_time - start_time
@@ -1038,41 +1768,90 @@ async def run_conversation_with_provider(
             metadata=test_case_def.metadata or {},
         )
 
-        # Create conversation turns with proper speaker attribute
-        turns = [
-            ConversationTurn(
-                turn_number=1,
-                speaker="user",
-                message=test_case_def.user_message,
-                timestamp=datetime.fromtimestamp(start_time),
-            ),
-            ConversationTurn(
-                turn_number=2,
-                speaker="agent",
-                message=response,
-                timestamp=datetime.fromtimestamp(end_time),
-            ),
-        ]
+        # Build conversation turns from raw messages with tool call tracking
+        turns = []
+        turn_number = 1
+        current_time = start_time
+        time_per_message = duration / len(raw_messages) if raw_messages else duration
 
-        # Create proper ConversationResult
+        for msg in raw_messages:
+            role = msg.get("role")
+            content = msg.get("content")
+
+            # Extract text content if it's a list of content blocks
+            text_content = ""
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text_content += block.get("text", "")
+                    elif hasattr(block, "text"):
+                        text_content += block.text
+            else:
+                text_content = str(content) if content else ""
+
+            speaker = "user" if role == "user" else "agent"
+
+            # Extract tool calls if this is an assistant message with tools
+            tool_calls_list = []
+            if role == "assistant" and msg.get("_has_tool_calls"):
+                from ..testing.core.test_models import ToolCall
+
+                for tool_call_data in msg.get("_tool_calls", []):
+                    tool_calls_list.append(
+                        ToolCall(
+                            tool_name=tool_call_data.get("tool_name", "unknown"),
+                            server_name="mcp_server",  # Generic server name for parallel execution
+                            input_params=tool_call_data.get("tool_input", {}),
+                            result=None,  # Results come in subsequent messages
+                            error=None,
+                            execution_time_ms=None,
+                        )
+                    )
+
+            turns.append(
+                ConversationTurn(
+                    turn_number=turn_number,
+                    speaker=speaker,
+                    message=text_content,
+                    tool_calls=tool_calls_list,
+                    timestamp=datetime.fromtimestamp(current_time),
+                )
+            )
+            turn_number += 1
+            current_time += time_per_message
+
+        # Infer preliminary status from conversation completion
+        # Check if tools were successfully used and response is meaningful
+        tools_were_used = len(tools_used) > 0
+        response_is_meaningful = len(response.strip()) > 50  # Basic heuristic
+
+        if tools_were_used and response_is_meaningful:
+            conv_status = ConversationStatus.GOAL_ACHIEVED
+            goal_achieved = True
+        elif tools_were_used:
+            conv_status = ConversationStatus.IN_PROGRESS
+            goal_achieved = False
+        else:
+            conv_status = ConversationStatus.ACTIVE
+            goal_achieved = False
+
+        # Note: Judge evaluation will make final determination
+
         conversation_result = ConversationResult(
             test_case=test_case,
             conversation_id=session_id,
             turns=turns,
-            status=ConversationStatus.GOAL_ACHIEVED,
-            completion_reason="Single turn response completed",
-            goal_achieved=True,  # Simplified - would need proper evaluation
+            status=conv_status,
+            completion_reason="Conversation completed - goal achievement to be determined by judge",
+            goal_achieved=goal_achieved,  # Preliminary determination, judge will finalize
             start_time=datetime.fromtimestamp(start_time),
             end_time=datetime.fromtimestamp(end_time),
             total_duration_seconds=duration,
-            total_turns=2,
-            user_turns=1,
-            agent_turns=1,
-            tools_used=[],  # Would be populated if tools were used
-            raw_conversation_data=[
-                {"role": "user", "content": test_case_def.user_message},
-                {"role": "assistant", "content": response},
-            ],
+            total_turns=len(turns),
+            user_turns=len([t for t in turns if t.speaker == "user"]),
+            agent_turns=len([t for t in turns if t.speaker == "agent"]),
+            tools_used=tools_used,
+            raw_conversation_data=raw_messages,
         )
 
         # Create result dict that maintains backward compatibility
@@ -1085,15 +1864,20 @@ async def run_conversation_with_provider(
                 "metadata": test_case_def.metadata or {},
             },
             "result": {
-                "status": {"value": "goal_achieved"},  # Simplified status
+                "status": {
+                    "value": conv_status.value
+                    if hasattr(conv_status, "value")
+                    else "completed"
+                },
                 "turns": [
-                    {"role": "user", "content": test_case_def.user_message},
-                    {"role": "assistant", "content": response},
+                    {"role": msg.get("role"), "content": msg.get("content")}
+                    for msg in raw_messages
                 ],
                 "duration": duration,
-                "success": True,  # Simplified success determination
+                "success": goal_achieved,  # Preliminary success, judge will finalize
+                "judge_pending": True,  # Indicate judge will evaluate
             },
-            "result_obj": conversation_result,  # Now a proper ConversationResult object
+            "result_obj": conversation_result,  # Now a proper ConversationResult object with tools
             "status": "completed",
         }
 
@@ -1248,13 +2032,21 @@ async def execute_standard_test_flow(
     # Run judge evaluation if not skipped
     evaluations = []
     if not skip_judge and test_results:
-        console.print("\nRunning LLM evaluation...")
+        console.print("\nRunning Evaluation...")
         try:
             judge = ConversationJudge()
             for result in test_results:
-                if result.get("status") == "completed" and result.get("result_obj"):
+                # Support both sequential and parallel formats
+                conversation_result = (
+                    result.get("result_obj")  # Parallel format
+                    or result.get("details", {}).get(
+                        "conversation_result"
+                    )  # Sequential format
+                )
+
+                if result.get("status") == "completed" and conversation_result:
                     eval_result = judge.evaluate_conversation(
-                        conversation=result["result_obj"]
+                        conversation=conversation_result
                     )
                     evaluations.append(eval_result.model_dump())
         except Exception as e:
@@ -1545,7 +2337,7 @@ async def execute_conversation_test_real(
         )
         return {
             "success": False,
-            "error": f"Connection timeout: Could not connect to server '{server_model.url}' within timeout period. Please check if the server is running.",
+            "error": f"Connection timeout: Could not connect to server '{server_model.url}' within timeout period. Please check if the server is running and consider increasing 'connection_timeout' in server config.",
             "response_time": 0.0,
         }
     except asyncio.CancelledError:
@@ -1560,6 +2352,17 @@ async def execute_conversation_test_real(
     except Exception as e:
         progress_tracker.update_simple_progress(test_id, "Test failed", completed=True)
         error_msg = str(e)
+
+        # Check for tool timeout in error message
+        if "execution timeout" in error_msg.lower():
+            progress_tracker.update_simple_progress(
+                test_id, "Tool timeout", completed=True
+            )
+            return {
+                "success": False,
+                "error": f"Tool execution timeout: {error_msg}. Consider increasing 'tool_timeout' in server config for slow operations.",
+                "response_time": 0.0,
+            }
 
         # Provide user-friendly error messages for common issues
         if "Failed to connect" in error_msg or "Connection refused" in error_msg:
@@ -1738,7 +2541,10 @@ async def execute_security_test_real(
             return {
                 "success": results.overall_security_score >= 70,  # Pass threshold
                 "response_time": 0.0,  # Security tests don't track individual timing
-                "message": f"Security assessment completed: {results.overall_security_score:.1f}/100, {results.vulnerabilities_found} vulnerabilities",
+                "message": (
+                    f"Security assessment completed: {results.overall_security_score:.1f}/100, "
+                    f"{results.vulnerabilities_found} vulnerabilities"
+                ),
                 "security_result": results,
             }
         else:

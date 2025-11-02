@@ -42,7 +42,7 @@ class AgentConfig(BaseModel):
     @property
     def max_tokens(self) -> int:
         """Fixed token limit for consistent testing"""
-        return 4000
+        return 10000
 
     @property
     def temperature(self) -> float:

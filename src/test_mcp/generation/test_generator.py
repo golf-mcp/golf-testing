@@ -28,49 +28,97 @@ class TestGenerator:
         return json_str
 
     def _calculate_num_tests(self, context: ServerContext) -> int:
-        """Calculate optimal number of tests based on discovered capabilities"""
+        """Calculate optimal number of tests based on discovered capabilities
+
+        Limits: Max 20 for tools/resources/prompts + always 5 integration tests
+        """
         num_tools = len(context.mcp_tools)
         num_resources = len(context.mcp_resources)
         num_prompts = len(context.mcp_prompts)
 
         # Generate tests: 6 per tool (1 happy path + 5 edge cases),
         # 6 per resource (1 valid + 5 edge cases), 1 per prompt
-        # Plus 1-2 integration tests
-        estimated_tests = (num_tools * 6) + (num_resources * 6) + num_prompts + 2
-        # Cap at reasonable number
-        return min(max(estimated_tests, 3), 30)
+        # Plus 5 integration tests
+        estimated_non_integration = (num_tools * 6) + (num_resources * 6) + num_prompts
+
+        # Apply limit: max 20 for non-integration tests
+        capped_non_integration = min(estimated_non_integration, 20)
+
+        # Always add 5 integration tests
+        return capped_non_integration + 5
 
     def _build_test_queue(self, context: ServerContext) -> list[dict]:
-        """Build ordered queue of test specifications to generate"""
-        queue = []
+        """Build ordered queue of test specifications to generate
 
-        # Tools: 1 happy path + 5 edge cases each
+        Limits:
+        - Maximum 20 tests for tools/resources/prompts combined
+        - Always 5 integration tests
+        """
+        queue = []
+        MAX_NON_INTEGRATION_TESTS = 20
+        INTEGRATION_TEST_COUNT = 5
+
+        # Build full queue first
+        tool_tests = []
         for tool in context.mcp_tools:
-            queue.append({"type": "happy_path", "tool": tool.name, "variant": 1})
-            queue.extend(
+            tool_tests.append({"type": "happy_path", "tool": tool.name, "variant": 1})
+            tool_tests.extend(
                 {"type": "edge_case", "tool": tool.name, "variant": i}
                 for i in range(1, 6)
             )
 
-        # Resources: 1 happy path + 5 edge cases each
+        resource_tests = []
         for resource in context.mcp_resources:
-            queue.append(
+            resource_tests.append(
                 {"type": "happy_path", "resource": resource.name, "variant": 1}
             )
-            queue.extend(
+            resource_tests.extend(
                 {"type": "edge_case", "resource": resource.name, "variant": i}
                 for i in range(1, 6)
             )
 
-        # Prompts: 1 test each
-        queue.extend(
+        prompt_tests = [
             {"type": "happy_path", "prompt": prompt, "variant": 1}
             for prompt in context.mcp_prompts
-        )
+        ]
 
-        # Integration: 2 tests
-        queue.append({"type": "integration", "variant": 1})
-        queue.append({"type": "integration", "variant": 2})
+        # Calculate total non-integration tests
+        total_tests = len(tool_tests) + len(resource_tests) + len(prompt_tests)
+
+        # Apply limit if exceeded
+        if total_tests > MAX_NON_INTEGRATION_TESTS:
+            # Proportionally reduce each category
+            ratio = MAX_NON_INTEGRATION_TESTS / total_tests
+
+            tool_limit = max(1, int(len(tool_tests) * ratio)) if tool_tests else 0
+            resource_limit = max(1, int(len(resource_tests) * ratio)) if resource_tests else 0
+            prompt_limit = max(1, int(len(prompt_tests) * ratio)) if prompt_tests else 0
+
+            # Adjust if we're still over the limit
+            current_total = tool_limit + resource_limit + prompt_limit
+            if current_total > MAX_NON_INTEGRATION_TESTS:
+                # Trim from the largest category
+                if tool_limit >= resource_limit and tool_limit >= prompt_limit:
+                    tool_limit -= (current_total - MAX_NON_INTEGRATION_TESTS)
+                elif resource_limit >= prompt_limit:
+                    resource_limit -= (current_total - MAX_NON_INTEGRATION_TESTS)
+                else:
+                    prompt_limit -= (current_total - MAX_NON_INTEGRATION_TESTS)
+
+            tool_tests = tool_tests[:tool_limit]
+            resource_tests = resource_tests[:resource_limit]
+            prompt_tests = prompt_tests[:prompt_limit]
+
+        # Add all tests to queue
+        queue.extend(tool_tests)
+        queue.extend(resource_tests)
+        queue.extend(prompt_tests)
+
+        # Always add exactly 5 integration tests
+        queue.extend(
+            {"type": "integration", "variant": i}
+            for i in range(1, INTEGRATION_TEST_COUNT + 1)
+        )
 
         return queue
 
@@ -212,8 +260,15 @@ CRITICAL: success_criteria must be a single string, NOT an array of strings. Com
     def _get_integration_instructions(self, test_spec: dict) -> str:
         """Get instructions for integration test"""
         variant = test_spec.get("variant", 1)
-        focus = "sequential usage" if variant == 1 else "complex workflow"
-        return f"Integration test: {focus}, 2+ tools/resources, multi-step scenario, 8-12 turns"
+        focus_options = [
+            "sequential usage of multiple capabilities",
+            "complex workflow combining tools and resources",
+            "error recovery across multiple operations",
+            "state management in multi-step process",
+            "end-to-end realistic user scenario"
+        ]
+        focus = focus_options[variant - 1] if variant <= len(focus_options) else focus_options[0]
+        return f"Integration test #{variant}: {focus}, 2+ tools/resources, multi-step scenario, 8-12 turns"
 
     async def _generate_single_test(
         self, test_spec: dict, request: GenerationRequest, context: ServerContext
@@ -381,15 +436,20 @@ CRITICAL: success_criteria must be a single string, NOT an array of strings. Com
     ) -> None:
         """Handle JSON parsing errors and save debug information"""
         import os
+        import uuid
         from datetime import datetime
 
         self.logger.error(f"Failed to parse generated tests JSON: {error}")
 
         debug_dir = "test_results/debug"
         os.makedirs(debug_dir, exist_ok=True)
-        debug_file = os.path.join(
-            debug_dir, f"json_error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        )
+
+        # Add collision safety with microseconds and unique ID
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[
+            :-3
+        ]  # Include milliseconds
+        unique_id = uuid.uuid4().hex[:8]
+        debug_file = os.path.join(debug_dir, f"json_error_{timestamp}_{unique_id}.txt")
 
         self._save_debug_file(debug_file, error, result_text, original_text)
         self._log_error_context(error, result_text)
@@ -693,7 +753,8 @@ Generate {num_tests} comprehensive conversational test cases that:
   1. ONE valid resource access test
   2. FIVE edge case tests (non-existent resources, invalid access patterns, permissions, etc.)
 - Create 1 test for EACH prompt
-- Include 1-2 integration tests that combine multiple tools/resources
+- Maximum 20 tests for tools/resources/prompts combined
+- Include exactly 5 integration tests that combine multiple tools/resources
 - CRITICAL: Generate diverse, comprehensive edge cases for every capability
 
 **Test Complexity Guidelines:**

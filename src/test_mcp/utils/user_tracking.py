@@ -1,4 +1,5 @@
 import json
+import threading
 import uuid
 from datetime import datetime
 
@@ -44,11 +45,14 @@ class UserTracker:
 
 # Global instance
 _user_tracker: UserTracker | None = None
+_user_tracker_lock = threading.Lock()
 
 
 def get_user_tracker() -> UserTracker:
     """Get shared user tracker instance"""
     global _user_tracker
-    if _user_tracker is None:
-        _user_tracker = UserTracker()
+    if _user_tracker is None:  # First check (optimization)
+        with _user_tracker_lock:
+            if _user_tracker is None:  # Second check (safety)
+                _user_tracker = UserTracker()
     return _user_tracker

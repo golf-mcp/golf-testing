@@ -25,7 +25,12 @@ class OpenAIProvider(ProviderInterface):
         self.mcp_resources: list[dict[str, Any]] = []
         self.mcp_prompts: list[dict[str, Any]] = []
 
-    async def send_message(self, message: str, system_prompt: str | None = None) -> str:
+    async def send_message(
+        self,
+        message: str,
+        system_prompt: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """Send message using OpenAI API"""
         start_time = time.perf_counter()
         self.metrics.requests_made += 1
@@ -153,36 +158,51 @@ class OpenAIProvider(ProviderInterface):
             raise
 
     async def start_session(self, session_id: str) -> bool:
-        """Initialize MCP connections"""
-        self.sessions[session_id] = {"created_at": time.time(), "message_count": 0}
+        """Start isolated session with dedicated MCP connections"""
+        # Create a dedicated MCP client manager for this session
+        mcp_client = MCPClientManager()
+        server_ids = []
 
-        mcp_servers = self.config.get("mcp_servers", [])
+        # Connect to MCP servers for this session
+        if "mcp_servers" in self.config:
+            for server in self.config["mcp_servers"]:
+                try:
+                    server_id = await mcp_client.connect_server(server)
+                    server_ids.append(server_id)
+                except Exception as e:
+                    # Clean up any connections made so far
+                    for sid in server_ids:
+                        try:
+                            await mcp_client.disconnect_server(sid)
+                        except Exception:
+                            pass
+                    raise RuntimeError(f"Failed to connect to server: {e}") from e
 
-        for server_config in mcp_servers:
-            try:
-                server_id = await self.mcp_client.connect_server(server_config)
-                self.server_ids.append(server_id)
-            except Exception as e:
-                print(f"Failed to connect: {e}")
-
-        if self.server_ids:
-            self.mcp_tools = await self.mcp_client.get_tools_for_llm(self.server_ids)
-            self.mcp_resources = await self.mcp_client.get_resources_for_llm(
-                self.server_ids
-            )
-            self.mcp_prompts = await self.mcp_client.get_prompts_for_llm(
-                self.server_ids
-            )
-
+        self.sessions[session_id] = {
+            "created_at": time.time(),
+            "message_count": 0,
+            "mcp_client": mcp_client,
+            "server_ids": server_ids,
+        }
         return True
 
     async def end_session(self, session_id: str) -> None:
-        """Clean up session"""
+        """Clean up session and disconnect MCP servers"""
         if session_id in self.sessions:
-            del self.sessions[session_id]
+            session = self.sessions[session_id]
 
-        # Clean up MCP connections
-        await self.mcp_client.disconnect_all()
+            # Disconnect all MCP servers for this session
+            mcp_client = session.get("mcp_client")
+            server_ids = session.get("server_ids", [])
+
+            if mcp_client and server_ids:
+                for server_id in server_ids:
+                    try:
+                        await mcp_client.disconnect_server(server_id)
+                    except Exception:
+                        pass  # Ignore cleanup errors
+
+            del self.sessions[session_id]
 
     async def _openai_api_call(self, message: str, system_prompt: str | None) -> str:
         """Internal OpenAI API call implementation"""

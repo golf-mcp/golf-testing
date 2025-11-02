@@ -6,8 +6,8 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, Field
 
-from ...shared.progress_tracker import ProgressTracker, TestStatus
-from ...shared.result_models import BaseTestResult, TestType
+from ...shared.progress_tracker import ProgressTracker, ExecutionStatus
+from ...shared.result_models import BaseTestResult, SuiteCategory
 
 
 class MCPHealthMetrics(BaseModel):
@@ -30,8 +30,8 @@ class MCPHealthMetrics(BaseModel):
 class MCPHealthTestResult(BaseTestResult):
     """Result of MCP health monitoring test (extends BaseTestResult)"""
 
-    test_type: TestType = Field(
-        default=TestType.COMPLIANCE, description="Test type identifier"
+    test_type: SuiteCategory = Field(
+        default=SuiteCategory.COMPLIANCE, description="Test type identifier"
     )
 
     # Health-specific fields
@@ -77,8 +77,8 @@ class MCPHealthMonitor:
         if self.progress_tracker:
             self.progress_tracker.update_test_status(
                 str(test_id),
-                TestType.COMPLIANCE,
-                TestStatus.RUNNING,
+                SuiteCategory.COMPLIANCE,
+                ExecutionStatus.RUNNING,
                 step_description="Testing server connectivity",
             )
 
@@ -109,7 +109,7 @@ class MCPHealthMonitor:
                     health_status=health_status,
                     start_time=start_time,
                     end_time=end_time,
-                    status=TestStatus.COMPLETED,
+                    status=ExecutionStatus.COMPLETED,
                     success=is_healthy,
                     metrics=metrics,
                     alert_level="error" if not is_healthy else "info",
@@ -125,7 +125,7 @@ class MCPHealthMonitor:
                 health_status="unhealthy",
                 start_time=start_time,
                 end_time=end_time,
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 alert_level="critical",
@@ -186,7 +186,7 @@ class MCPHealthMonitor:
                         health_status=health_status,
                         start_time=start_time,
                         end_time=end_time,
-                        status=TestStatus.COMPLETED,
+                        status=ExecutionStatus.COMPLETED,
                         success=health_status != "unhealthy",
                         metrics=metrics,
                         alert_level=alert_level,
@@ -202,7 +202,7 @@ class MCPHealthMonitor:
                         health_status="unhealthy",
                         start_time=start_time,
                         end_time=end_time,
-                        status=TestStatus.FAILED,
+                        status=ExecutionStatus.FAILED,
                         success=False,
                         error_message="No successful responses",
                         alert_level="critical",
@@ -218,7 +218,7 @@ class MCPHealthMonitor:
                 health_status="unhealthy",
                 start_time=start_time,
                 end_time=end_time,
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 alert_level="error",
@@ -272,7 +272,7 @@ class MCPHealthMonitor:
                             health_status="healthy",
                             start_time=start_time,
                             end_time=end_time,
-                            status=TestStatus.COMPLETED,
+                            status=ExecutionStatus.COMPLETED,
                             success=True,
                             metrics=metrics,
                             alert_level="info",
@@ -288,7 +288,7 @@ class MCPHealthMonitor:
                     health_status="unhealthy",
                     start_time=start_time,
                     end_time=end_time,
-                    status=TestStatus.FAILED,
+                    status=ExecutionStatus.FAILED,
                     success=False,
                     error_message="MCP protocol initialization failed",
                     alert_level="error",
@@ -304,7 +304,7 @@ class MCPHealthMonitor:
                 health_status="unhealthy",
                 start_time=start_time,
                 end_time=end_time,
-                status=TestStatus.FAILED,
+                status=ExecutionStatus.FAILED,
                 success=False,
                 error_message=str(e),
                 alert_level="error",

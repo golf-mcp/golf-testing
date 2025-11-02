@@ -4,17 +4,21 @@ Test run summary utilities.
 Extracted from TestExecutor to provide summary generation without single-turn testing dependency.
 """
 
-from ..core.test_models import TestRun, TestRunSummary, TestStatus
+from ..core.test_models import TestRun, TestRunSummary, ExecutionStatus
 
 
 def generate_test_run_summary(test_run: TestRun) -> TestRunSummary:
     """Generate a summary of test run results"""
     # Count results by status
     completed_tests = [
-        e for e in test_run.executions if e.status == TestStatus.COMPLETED
+        e for e in test_run.executions if e.status == ExecutionStatus.COMPLETED
     ]
-    failed_tests = [e for e in test_run.executions if e.status == TestStatus.FAILED]
-    timeout_tests = [e for e in test_run.executions if e.status == TestStatus.TIMEOUT]
+    failed_tests = [
+        e for e in test_run.executions if e.status == ExecutionStatus.FAILED
+    ]
+    timeout_tests = [
+        e for e in test_run.executions if e.status == ExecutionStatus.TIMEOUT
+    ]
 
     total_duration = 0.0
     if test_run.start_time and test_run.end_time:

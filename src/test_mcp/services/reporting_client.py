@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime
 
 import httpx
@@ -69,11 +70,14 @@ class ReportingServiceClient:
 
 # Global instance
 _reporting_client: ReportingServiceClient | None = None
+_reporting_client_lock = threading.Lock()
 
 
 def get_reporting_client() -> ReportingServiceClient:
     """Get shared reporting client instance"""
     global _reporting_client
-    if _reporting_client is None:
-        _reporting_client = ReportingServiceClient()
+    if _reporting_client is None:  # First check (optimization)
+        with _reporting_client_lock:
+            if _reporting_client is None:  # Second check (safety)
+                _reporting_client = ReportingServiceClient()
     return _reporting_client
