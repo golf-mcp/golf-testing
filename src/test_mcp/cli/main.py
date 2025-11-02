@@ -145,12 +145,47 @@ def show_mcpt_overview() -> None:
     console.print_command(
         "mcp-t show <server|suite> <CONFIG-ID>", "Show configuration details"
     )
-    console.console.print()
-    console.console.print("[dim]Use 'mcp-t --help' for all commands[/dim]")
 
 
-@click.group(invoke_without_command=True, name="mcp-t")
+def show_help(ctx, param, value):
+    """Custom help callback that shows the same overview as when no command is given"""
+    if value and not ctx.resilient_parsing:
+        argv = sys.argv[1:]
+        help_index = next(
+            (i for i, arg in enumerate(argv) if arg in ["--help", "-h"]), -1
+        )
+        subcommands = [
+            "quickstart",
+            "generate",
+            "create",
+            "run",
+            "list",
+            "show",
+            "report",
+        ]
+
+        if help_index >= 0:
+            has_subcommand_before = any(arg in subcommands for arg in argv[:help_index])
+            if not has_subcommand_before:
+                show_mcpt_overview()
+                ctx.exit()
+
+
+@click.group(
+    invoke_without_command=True,
+    name="mcp-t",
+    context_settings={"help_option_names": []},  # Disable default help at group level
+)
 @click.version_option(version=__version__, prog_name="mcp-t")
+@click.option(
+    "--help",
+    "-h",
+    is_flag=True,
+    is_eager=True,
+    expose_value=False,
+    callback=show_help,
+    help="Show this message and exit",
+)
 @click.option(
     "--no-update-notifier", is_flag=True, help="Disable version update notifications"
 )

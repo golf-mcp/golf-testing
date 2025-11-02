@@ -5,11 +5,13 @@ from test_mcp.cli.main import mcpt_cli
 
 class TestCLIIntegration:
     def test_no_update_notifier_flag(self):
-        """Test --no-update-notifier flag"""
+        """Test --no-update-notifier flag with help shows overview"""
         runner = CliRunner()
         result = runner.invoke(mcpt_cli, ["--no-update-notifier", "--help"])
         assert result.exit_code == 0
-        assert "no-update-notifier" in result.output
+        # With custom help, we show the overview instead of detailed flags
+        assert "MCP Testing (mcp-t)" in result.output
+        assert "Common commands:" in result.output
 
     def test_version_check_doesnt_break_commands(self):
         """Test that version checking doesn't break normal commands"""

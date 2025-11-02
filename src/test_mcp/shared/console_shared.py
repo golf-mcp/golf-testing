@@ -101,12 +101,15 @@ class MCPConsole:
         """Create standardized configuration table"""
         table = Table()
 
-        # Determine column name based on config type
+        # Set table title based on config type
         if config_type.lower() == "test suite":
+            table.title = "Test Suite List"
             id_column_name = "Suite ID"
         elif config_type.lower() == "server":
+            table.title = "Server List"
             id_column_name = "Server ID"
         else:
+            table.title = f"{config_type} List"
             id_column_name = "ID"
 
         table.add_column(id_column_name, style="cyan", no_wrap=True)
