@@ -34,11 +34,12 @@ dependencies = [
     "httpx>=0.25.0",
     "click>=8.0.0",
     "rich>=13.0.0",
-    "PyYAML>=6.0.0",  # For configuration file handling
-    "mcp>=1.15.0",  # Official MCP Python SDK for compliance testing
-    "PyJWT>=2.10.1",  # For OAuth JWT token creation and validation in testing (security fix)
-    "packaging>=21.0",  # For semantic version comparison in version checker
-    "beautifulsoup4>=4.12.0",  # For web scraping in auto test generation
+    "PyYAML>=6.0.0",
+    "mcp>=1.17.0", 
+    "python-dotenv>=1.0.0",
+    "PyJWT>=2.10.1",
+    "packaging>=21.0",
+    "beautifulsoup4>=4.12.0",
 ]
 
 [project.optional-dependencies]

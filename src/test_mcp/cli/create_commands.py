@@ -54,6 +54,13 @@ def create_server_command() -> click.Command:
         Interactive wizard to create a new MCP server configuration
         with authentication and tool settings.
 
+        Usage:
+          mcp-t create server [OPTIONS]
+
+        Options:
+          --global        Save configuration globally instead of locally
+          --id <SERVER-ID>  Server ID (if not provided, will prompt)
+
         Examples:
           mcp-t create server
           mcp-t create server --id my-production-server
@@ -206,7 +213,7 @@ def create_server_command() -> click.Command:
         console.print(f"✅ Server configuration saved: {server_file}")
         console.print(f"✅ Created server config: [cyan]{server_id}[/cyan]")
         console.print(
-            f"\n[bold]Test it with:[/bold] [cyan]mcp-t run <suite-id> {server_id}[/cyan]"
+            f"\n[bold]Test it with:[/bold] [cyan]mcp-t run <SUITE-ID> {server_id}[/cyan]"
         )
 
         trigger_post_command_hooks(ctx)
@@ -232,9 +239,17 @@ def create_suite_command() -> click.Command:
         Interactive wizard to create test suites with templates for different
         test types: Compliance, Security, or Conversational.
 
+        Usage:
+          mcp-t create suite [OPTIONS]
+
+        Options:
+          --global        Save configuration globally instead of locally
+          --id <SUITE-ID>  Suite ID (if not provided, will prompt)
+
         Examples:
           mcp-t create suite
           mcp-t create suite --id my-security-tests
+          mcp-t create suite --global
         """
         console = get_console()
         config_manager = ConfigManager()
@@ -278,7 +293,7 @@ def create_suite_command() -> click.Command:
         console.print(f"✅ Created test suite config: [cyan]{suite_id}[/cyan]")
         console.print(f"✅ Suite type: [yellow]{type(suite).__name__}[/yellow]")
         console.print(
-            f"\n[bold]Test it with:[/bold] [cyan]mcp-t run {suite_id} <server-id>[/cyan]"
+            f"\n[bold]Test it with:[/bold] [cyan]mcp-t run {suite_id} <SERVER-ID>[/cyan]"
         )
 
         trigger_post_command_hooks(ctx)
@@ -319,7 +334,7 @@ def _create_typed_suite(test_type: str, use_global: bool, suite_id: str | None):
     console.print(f"✅ Created {test_type} test suite: [cyan]{suite_id}[/cyan]")
     console.print(f"✅ Suite type: [yellow]{type(suite).__name__}[/yellow]")
     console.print(
-        f"\n[bold]Test it with:[/bold] [cyan]mcp-t run {suite_id} <server-id>[/cyan]"
+        f"\n[bold]Test it with:[/bold] [cyan]mcp-t run {suite_id} <SERVER-ID>[/cyan]"
     )
 
 
@@ -332,6 +347,12 @@ def create_test_case_command() -> click.Command:
         """Add test case to existing suite
 
         Add a new test case to an existing test suite configuration.
+
+        Usage:
+          mcp-t create test-case --suite-id <SUITE-ID>
+
+        Options:
+          --suite-id <SUITE-ID>  Suite ID to add test case to (required)
 
         Examples:
           mcp-t create test-case --suite-id basic-tests

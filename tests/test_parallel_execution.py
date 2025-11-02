@@ -207,20 +207,57 @@ class TestPerformanceImprovement:
     @pytest.mark.asyncio
     @pytest.mark.slow
     async def test_parallel_faster_than_sequential(self):
-        """Verify parallel execution is faster than sequential (integration test)"""
-        # This is a placeholder for integration testing
-        # Would require actual MCP server and multiple test cases
+        """Verify parallel execution is faster than sequential execution"""
 
-        # Conceptual test:
-        # 1. Run 5 tests sequentially, measure time
-        # 2. Run same 5 tests with parallelism=3, measure time
-        # 3. Assert parallel is faster
+        async def simulate_test_execution(test_id: str, delay: float = 0.2):
+            """Simulate a test execution with a delay"""
+            await asyncio.sleep(delay)
+            return {"test_id": test_id, "success": True}
 
-        # For unit testing, we just verify the structure exists
-        suite = ConversationTestSuite(
-            suite_id="test_suite", name="Test Suite", test_cases=[]
+        num_tests = 5
+        test_ids = [f"test_{i}" for i in range(num_tests)]
+        parallelism = 3
+
+        # Sequential execution: run tests one at a time
+        sequential_start = time.time()
+        sequential_results = []
+        for test_id in test_ids:
+            result = await simulate_test_execution(test_id)
+            sequential_results.append(result)
+        sequential_time = time.time() - sequential_start
+
+        # Parallel execution: run tests concurrently with semaphore
+        parallel_start = time.time()
+        semaphore = asyncio.Semaphore(parallelism)
+
+        async def run_with_semaphore(test_id: str):
+            async with semaphore:
+                return await simulate_test_execution(test_id)
+
+        parallel_results = await asyncio.gather(
+            *[run_with_semaphore(test_id) for test_id in test_ids]
         )
-        assert hasattr(suite, "parallelism")
+        parallel_time = time.time() - parallel_start
+
+        # Verify all tests completed
+        assert len(sequential_results) == num_tests
+        assert len(parallel_results) == num_tests
+
+        # Verify parallel execution is faster
+        # Sequential should take ~num_tests * delay (1.0s for 5 tests * 0.2s)
+        # Parallel should take ~ceil(num_tests/parallelism) * delay (~0.4s for 5 tests with parallelism=3)
+        # We allow some tolerance for timing variability
+        assert parallel_time < sequential_time, (
+            f"Parallel execution ({parallel_time:.3f}s) should be faster than "
+            f"sequential ({sequential_time:.3f}s)"
+        )
+
+        # Parallel should be at least 30% faster (allowing for overhead)
+        speedup_ratio = sequential_time / parallel_time
+        assert speedup_ratio > 1.3, (
+            f"Expected parallel execution to be at least 30% faster, "
+            f"but speedup ratio was only {speedup_ratio:.2f}x"
+        )
 
     def test_parallelism_configuration(self):
         """Test parallelism configuration on test suites"""

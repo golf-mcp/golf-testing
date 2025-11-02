@@ -230,7 +230,7 @@ def setup_completion_step(console):
 
     if not Confirm.ask("Would you like to set up shell tab completion?", default=True):
         console.print_info(
-            "You can set up completion later with 'mcp-t completion-setup'"
+            "Shell completion can be set up manually by running quickstart again"
         )
         console.console.print()
         console.console.print("[bold]Quickstart complete! 🎉[/bold]")
@@ -274,22 +274,23 @@ def show_quickstart_guide():
   Streamlined workflow: guide → your configs → shell completion
 
 [bold]Step 3: Run Your First Test[/bold]
-  [cyan]$ mcp-t run basic-tests my-server[/cyan]
+  [cyan]$ mcp-t run <SUITE-ID> <SERVER-ID>[/cyan]
   (Use the IDs you created in quickstart)
 
 [bold]Step 4: Create More Tests[/bold]
   [cyan]$ mcp-t create suite[/cyan]          # Interactive test creation
   [cyan]$ mcp-t create server[/cyan]         # Add more servers
+  [cyan]$ mcp-t generate[/cyan]              # Auto-generate tests with AI
 
 [bold]Step 5: Explore More[/bold]
-  [cyan]$ mcp-t list[/cyan]                  # See your configurations
-  [cyan]$ mcp-t run compliance-suite my-server[/cyan]  # Run compliance tests
-  [cyan]$ mcp-t run security-suite my-server[/cyan]    # Run security tests
+  [cyan]$ mcp-t list [servers|suites][/cyan]        # See your configurations
+  [cyan]$ mcp-t show <server|suite> <ID>[/cyan]     # View configuration details
+  [cyan]$ mcp-t run <SUITE-ID> <SERVER-ID> -v[/cyan] # Run with verbose output
 
 [bold]Pro Tips:[/bold]
 • Use Tab completion to see available configurations
-• Add -v flag for detailed output
-• Use mcp-t COMMAND --help for command-specific help"""
+• Add -v/--verbose flag for detailed output
+• Use mcp-t <COMMAND> --help for command-specific help"""
 
     panel = Panel(
         content,

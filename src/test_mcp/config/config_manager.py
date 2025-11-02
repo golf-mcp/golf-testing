@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 from enum import Enum
@@ -530,11 +531,20 @@ class ConfigManager:
                     is_local = servers_dir == paths["local"]["servers_dir"]
                     source = "local" if is_local else "system"
 
+                    # Get file modification time as creation date
+                    file_stat = server_file.stat()
+                    creation_date = datetime.datetime.fromtimestamp(
+                        file_stat.st_mtime
+                    ).strftime("%Y-%m-%d")
+
                     servers[server_id] = {
                         "name": config.get("name", server_id),
                         "url": config.get("url", ""),
                         "source": source,
                         "path": str(server_file),
+                        "transport": config.get("transport", "http"),
+                        "oauth": config.get("oauth", False),
+                        "creation_date": creation_date,
                     }
                 except (json.JSONDecodeError, KeyError):
                     continue
@@ -564,12 +574,19 @@ class ConfigManager:
                     is_local = suites_dir == paths["local"]["suites_dir"]
                     source = "local" if is_local else "system"
 
+                    # Get file modification time as creation date
+                    file_stat = suite_file.stat()
+                    creation_date = datetime.datetime.fromtimestamp(
+                        file_stat.st_mtime
+                    ).strftime("%Y-%m-%d")
+
                     suites[suite_id] = {
                         "name": config.get("name", suite_id),
                         "description": config.get("description", ""),
                         "test_count": len(config.get("test_cases", [])),
                         "source": source,
                         "path": str(suite_file),
+                        "creation_date": creation_date,
                     }
                 except (json.JSONDecodeError, KeyError):
                     continue

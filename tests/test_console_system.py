@@ -48,7 +48,9 @@ class TestMCPConsole:
 
         table = console.create_config_table(test_configs, "Server")
         assert table.title == "Server List"
-        assert len(table.columns) == 4
+        assert (
+            len(table.columns) == 5
+        )  # Server ID, Details, Transport, OAuth, Creation Date
 
     def test_singleton_console_access(self):
         """Test get_console returns same instance"""

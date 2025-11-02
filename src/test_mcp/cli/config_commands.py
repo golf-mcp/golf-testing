@@ -44,6 +44,12 @@ def create_list_command() -> click.Command:
     def mcpt_list_complete(ctx, type_filter: str | None = None):
         """List available configurations by memorable ID
 
+        Usage:
+          mcp-t list [TYPE-FILTER]
+
+        Arguments:
+          TYPE-FILTER  Optional filter: 'servers' or 'suites' (use tab completion)
+
         Examples:
           mcp-t list           # List all configurations
           mcp-t list servers   # List only servers
@@ -57,20 +63,20 @@ def create_list_command() -> click.Command:
 
         if not type_filter or type_filter == "servers":
             if servers:
-                console.print_header("Servers:")
                 server_table = console.create_config_table(servers, "Server")
                 console.console.print(server_table)
 
         if not type_filter or type_filter == "suites":
             if suites:
                 console.console.print()
-                console.print_header("Test Suites:")
                 suite_table = console.create_config_table(suites, "Test Suite")
                 console.console.print(suite_table)
 
         if not servers and not suites:
             console.print_warning("No configurations found")
-            console.print_info("Use 'mcp-t init' to create configurations")
+            console.print_info(
+                "Use 'mcp-t create server' or 'mcp-t create suite' to create configurations"
+            )
 
         trigger_post_command_hooks(ctx)
 
@@ -90,6 +96,13 @@ def create_show_command() -> click.Command:
     @click.pass_context
     def mcpt_show_complete(ctx, config_type: str, config_id: str):
         """Show configuration details by type and ID
+
+        Usage:
+          mcp-t show <CONFIG-TYPE> <CONFIG-ID>
+
+        Arguments:
+          CONFIG-TYPE  Configuration type: 'server' or 'suite' (use tab completion)
+          CONFIG-ID    Configuration identifier
 
         Examples:
           mcp-t show server test-local
