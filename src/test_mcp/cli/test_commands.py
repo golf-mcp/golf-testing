@@ -52,14 +52,7 @@ def create_run_command():
     def mcpt_run_complete(
         ctx, suite_id: str, server_id: str, verbose: bool, use_global_dir: bool
     ):
-        """Run test suite against MCP server with enhanced validation and suggestions
-
-        Examples (with tab completion):
-          mcp-t run basic-tests dev-server
-          mcp-t run compliance-suite prod-server -v
-
-        Tip: Use 'mcp-t help run' for detailed examples and troubleshooting
-        """
+        """Run test suite against MCP server with enhanced validation and suggestions"""
         # Enhanced implementation with better error handling
         config_manager = ConfigManager()
         console = get_console()

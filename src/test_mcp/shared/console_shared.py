@@ -99,28 +99,45 @@ class MCPConsole:
         self, items: dict[str, dict], config_type: str = "Configuration"
     ) -> Table:
         """Create standardized configuration table"""
-        table = Table(title=f"{config_type} List")
-        table.add_column("ID", style="cyan", no_wrap=True)
-        table.add_column("Name", style="white")
-        table.add_column("Details", style="dim")
-        table.add_column("Source", justify="center", style="dim")
+        table = Table()
+
+        # Determine column name based on config type
+        if config_type.lower() == "test suite":
+            id_column_name = "Suite ID"
+        elif config_type.lower() == "server":
+            id_column_name = "Server ID"
+        else:
+            id_column_name = "ID"
+
+        table.add_column(id_column_name, style="cyan", no_wrap=True)
+
+        # Add columns based on config type
+        if config_type.lower() == "server":
+            table.add_column("Details", style="dim")
+            table.add_column("Transport", style="dim", justify="center")
+            table.add_column("OAuth", style="dim", justify="center")
+            table.add_column("Creation Date", style="dim", justify="center")
+        elif config_type.lower() == "test suite":
+            table.add_column("Tests", style="dim", justify="left")
+            table.add_column("Creation Date", style="dim", justify="center")
+        else:
+            table.add_column("Details", style="dim")
 
         for item_id, item_info in items.items():
-            source_icon = "📁" if item_info.get("source") == "local" else "🏠"
-
             # Create details string based on config type
-            details = ""
             if config_type.lower() == "server":
                 details = item_info.get("url", "No URL")
+                transport = item_info.get("transport", "http")
+                oauth = "Yes" if item_info.get("oauth", False) else "No"
+                creation_date = item_info.get("creation_date", "Unknown")
+                table.add_row(item_id, details, transport, oauth, creation_date)
             elif config_type.lower() == "test suite":
                 test_count = item_info.get("test_count", 0)
-                details = f"{test_count} tests"
+                creation_date = item_info.get("creation_date", "Unknown")
+                table.add_row(item_id, str(test_count), creation_date)
             else:
                 details = item_info.get("type", "unknown")
-
-            table.add_row(
-                item_id, item_info.get("name", "Unknown"), details, source_icon
-            )
+                table.add_row(item_id, details)
 
         return table
 

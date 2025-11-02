@@ -34,6 +34,12 @@ def create_generate_command() -> click.Command:
         Interactive wizard that researches your MCP server and generates
         comprehensive test cases automatically.
 
+        Usage:
+          mcp-t generate [OPTIONS]
+
+        Options:
+          --global  Save configuration globally instead of locally
+
         Examples:
           mcp-t generate
           mcp-t generate --global

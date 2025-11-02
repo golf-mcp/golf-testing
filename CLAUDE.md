@@ -39,25 +39,28 @@ python -m pytest -v --tb=short  # verbose with short traceback
 mcp-t --help
 
 # Complete onboarding (demo + configuration + shell completion)
-mcp-t quickstart
+mcp-t quickstart [--skip-config]
 
 # Create configurations
-mcp-t create server          # Interactive server creation
-mcp-t create suite           # Interactive test suite creation with templates
-mcp-t create test-case --suite-id existing-suite
+mcp-t create server [--global] [--id <SERVER-ID>]          # Interactive server creation
+mcp-t create suite [--global] [--id <SUITE-ID>]            # Interactive test suite creation with templates
+mcp-t create test-case --suite-id <SUITE-ID>               # Add test case to existing suite
+
+# Generate tests automatically
+mcp-t generate [--global]                                  # Auto-generate tests with AI
 
 # Run tests
-mcp-t run suite-id server-id
-mcp-t run suite-id server-id --verbose
+mcp-t run <SUITE-ID> <SERVER-ID> [--verbose] [--global]    # Run test suite against server
 
-# Additional commands
-mcp-t compliance server-id
-mcp-t health server-id
-mcp-t list                   # View configurations
-mcp-t show server server-id  # View specific configuration
+# View configurations
+mcp-t list [servers|suites]                                # List all or filtered configurations
+mcp-t show <server|suite> <CONFIG-ID>                      # Show configuration details
+
+# Report issues
+mcp-t report issue [OPTIONS]                              # Report issues and provide feedback
 
 # Version update notifications
-mcp-t --no-update-notifier COMMAND  # Disable update notifications for a command
+mcp-t --no-update-notifier <COMMAND>                       # Disable update notifications for a command
 ```
 
 ### Version Update Notifications

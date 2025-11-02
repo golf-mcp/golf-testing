@@ -2135,7 +2135,7 @@ def run_with_mcpt_inference(
 
     except KeyError:
         console.print(f"[yellow]No {test_type} test suite found.[/yellow]")
-        console.print(f"Use 'mcp-t init' to create a {test_type} test configuration")
+        console.print(f"Use 'mcp-t create suite' to create a {test_type} test configuration")
         sys.exit(1)
 
 

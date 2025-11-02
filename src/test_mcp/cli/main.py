@@ -131,10 +131,20 @@ def show_mcpt_overview() -> None:
     console.console.print()
     console.console.print("[bold]Common commands:[/bold]")
     console.print_command("mcp-t quickstart", "Complete onboarding (demo + config)")
-    console.print_command("mcp-t generate", "Auto-generate tests with AI")
-    console.print_command("mcp-t create suite", "Create test configurations")
-    console.print_command("mcp-t create server", "Add server configurations")
-    console.print_command("mcp-t run suite-id server-id", "Run tests")
+    console.print_command("mcp-t generate [--global]", "Auto-generate tests with AI")
+    console.print_command(
+        "mcp-t create suite [--global] [--id <SUITE-ID>]", "Create test configurations"
+    )
+    console.print_command(
+        "mcp-t create server [--global] [--id <SERVER-ID>]", "Add server configurations"
+    )
+    console.print_command(
+        "mcp-t run <SUITE-ID> <SERVER-ID> [--verbose] [--global]", "Run tests"
+    )
+    console.print_command("mcp-t list [servers|suites]", "List configurations")
+    console.print_command(
+        "mcp-t show <server|suite> <CONFIG-ID>", "Show configuration details"
+    )
     console.console.print()
     console.console.print("[dim]Use 'mcp-t --help' for all commands[/dim]")
 
@@ -149,16 +159,7 @@ def show_mcpt_overview() -> None:
 )
 @click.pass_context
 def mcpt_cli(ctx, no_update_notifier, no_report_suggestions) -> None:
-    """MCP Testing - Ultra-simple MCP server testing
-
-    \\b
-    Quick Commands:
-      mcp-t quickstart               # Complete onboarding
-      mcp-t generate                 # Auto-generate tests with AI
-      mcp-t create suite             # Create test suites
-      mcp-t create server            # Add servers
-      mcp-t run suite-id server-id   # Run tests
-    """
+    """MCP Testing - Ultra-simple MCP server testing"""
     # Store flags in context for subcommands
     ctx.ensure_object(dict)
     ctx.obj["no_update_notifier"] = no_update_notifier

@@ -74,7 +74,7 @@ def suggest_config_corrections(
         suggestion_list.extend(
             [
                 f"Use 'mcp-t list {config_type}s' to see all options",
-                "Use 'mcp-t init' to create new configurations",
+                f"Use 'mcp-t create {config_type}' to create new configurations",
             ]
         )
 
@@ -89,7 +89,7 @@ def suggest_config_corrections(
         if len(available_ids) > 5:
             console.print(f"  ... and {len(available_ids) - 5} more")
         console.print_info(f"Use 'mcp-t list {config_type}s' to see all options")
-        console.print_info("Use 'mcp-t init' to create new configurations")
+        console.print_info(f"Use 'mcp-t create {config_type}' to create new configurations")
 
     return len(suggestions) > 0
 
