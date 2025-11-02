@@ -1244,7 +1244,11 @@ async def run_single_test_case(
         # Route to appropriate real test engine (existing pattern from enhanced progress)
         if test_type == "compliance":
             result = await execute_compliance_test_real(
-                test_case, server_config.model_dump(), progress_tracker, test_id, verbose
+                test_case,
+                server_config.model_dump(),
+                progress_tracker,
+                test_id,
+                verbose,
             )
         elif test_type == "security":
             result = await execute_security_test_real(
@@ -2135,7 +2139,9 @@ def run_with_mcpt_inference(
 
     except KeyError:
         console.print(f"[yellow]No {test_type} test suite found.[/yellow]")
-        console.print(f"Use 'mcp-t create suite' to create a {test_type} test configuration")
+        console.print(
+            f"Use 'mcp-t create suite' to create a {test_type} test configuration"
+        )
         sys.exit(1)
 
 
@@ -2425,7 +2431,9 @@ async def execute_compliance_test_real(
             check_categories = test_id_to_category.get(test_case_id)
 
         # Create compliance tester with server config
-        compliance_tester = MCPComplianceTester(server_model.model_dump(), progress_tracker)
+        compliance_tester = MCPComplianceTester(
+            server_model.model_dump(), progress_tracker
+        )
 
         progress_tracker.update_simple_progress(test_id, "Running compliance checks...")
 
